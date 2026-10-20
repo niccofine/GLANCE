@@ -1,0 +1,1 @@
+<h1 align="center">A GLANCE into the Future: Grade-Anchored Liquid AMD Network for Continuous-Time Evolution of AMD Progression from Fundus Images</h1>
