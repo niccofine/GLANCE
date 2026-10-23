@@ -37,7 +37,7 @@ Rather than predicting binary risk at fixed horizons, we forecast the full grade
  
 Our contributions are:
 - We formulate AMD progression as a **grade-anchored continuous-time trajectory forecasting**: frozen RET-CLIP features of both eyes, $\mathbf{z_\mathrm{LE}}$ and $\mathbf{z_\mathrm{RE}}$, and the current grade, $s$, condition a closed-form Liquid Neural Network queried at any time.
-- We introduce a **progression penalty** against decreasing forecasts, $\lambda P$, with **horizon weighting**, $\mathcal{L}_\mathrm{MSE}^{m}$, and a **robust slope loss** for distant follow-up and progression speed, $\mu\mathcal{L}_\mathrm{slope}$.
+- We introduce a **progression penalty** against decreasing forecasts, with **horizon weighting** and a **robust slope loss** for distant follow-up and progression speed.
 - On AREDS dataset, with a pre-specified protocol, we show that the penalty removes implausible forecasts at comparable error, and that trajectory forecasters match fixed-horizon baselines on late AMD prediction while estimating **onset time**.
 
 Moreover, attribution analysis confirms the prognostic signal for disease worsening is concentrated around the macula and the optic disc.
