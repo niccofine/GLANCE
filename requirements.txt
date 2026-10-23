@@ -1,0 +1,19 @@
+## Basic packages
+numpy==2.4.6 # numerical arrays
+pandas==3.0.5 # tables, CSV I/O
+openpyxl==3.1.5 # pandas .xlsx reader (raw grades spreadsheet)
+scipy==1.17.1 # statistical tests (Mann-Whitney, Wilcoxon)
+scikit-learn==1.8.0 # PCA, logistic regression, SVM, calibration, cross-validation splitters
+scikit-image==0.26.0 # Otsu thresholding / region labeling (fundus image preprocessing)
+Pillow==12.3.0 # image loading
+
+## Survival analysis
+lifelines==0.30.0 # Cox proportional hazards, Harrell's C, Kaplan-Meier
+
+## Deep learning
+torch==2.11.0 # tensors, autograd, optimizers
+torchvision==0.26.0 # image transforms (resize, normalize)
+ncps==1.0.1 # Closed-form Continuous-time (CfC) liquid neural network cell
+
+## External RET-CLIP-PLUS encoder
+transformers # required by the RET-CLIP-PLUS text tower, not by this package's own code

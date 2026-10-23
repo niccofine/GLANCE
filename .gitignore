@@ -1,0 +1,29 @@
+# Output tree and data
+/data/
+/results/
+
+# Model checkpoints
+*.pt
+*.pth
+*.pkl
+
+# Python packaging / cache
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+.eggs/
+build/
+dist/
+
+# OS / editor
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+
+# Virtual environments
+.venv/
+venv/
