@@ -1,17 +1,27 @@
 """Post-pipeline analyses (no training; saved forecasts and saved explainability outputs only). Cross-validation out-of-fold = primary; test set = descriptive only.
-  onset     : onset timing  -> results/posthoc/onset_{summary,tests,per_patient}.csv
-  figs      : converters aligned at onset, non-converters by first grade -> results/posthoc/table_{converters_aligned,nonconverters}.csv
-  bygrade   : discrimination within first-grade strata -> results/posthoc/bygrade_{metrics,tests}.csv
-  explain59 : explainability -> results/posthoc/{A_shares_eval59.json, B2_concepts_eval59.csv, C_macula_eval59.csv, C_maps_eval59.npz, explain_summary_eval59.json}
-  irregular : evaluation of the irregular-visit training experiment -> results/posthoc/irregular/{irreg_metrics.csv, irreg_tests.csv, fig_irregular.{pdf,png}}
-  querystep : re-runs saved crossvalidation checkpoints at 3 query-grid resolutions (no training) -> results/posthoc/querystep/{querystep_metrics.csv, querystep_tests.csv, check_reproduce_saved.json, querystep_info.json, fig_querystep_example.{pdf,png}}
+  onset           : onset timing  -> results/posthoc/onset_{summary,tests,per_patient}.csv
+  onset_class     : 4-way onset classification (on time / early / late / missed), by first-grade stratum -> results/posthoc/onset_class.csv
+  late_per_seed   : "% late" onset error per seed (not pooled), cross-validation fixed grid / no grid (S0) / test -> results/posthoc/late_per_seed.csv
+  onset_by_grade  : the same onset-timing errors broken out by starting grade -> results/posthoc/onset_by_grade.csv
+  figs            : converters aligned at onset, non-converters by first grade -> results/posthoc/table_{converters_aligned,nonconverters}.csv
+  bygrade         : discrimination within first-grade strata -> results/posthoc/bygrade_{metrics,tests}.csv
+  ablation_extra  : no-grid AUC 5y for the irregular-visit experiment + loss-ablation V0-V4 rising/late stats -> results/posthoc/{irregular/auc5_nogrid.csv,ablation_extra.csv}
+  explain59       : explainability -> results/posthoc/{A_shares_eval59.json, B2_concepts_eval59.csv, C_macula_eval59.csv, C_maps_eval59.npz, explain_summary_eval59.json}
+  irregular       : evaluation of the irregular-visit training experiment, seed 0, 5 backbones -> results/posthoc/irregular/{irreg_metrics.csv, irreg_tests.csv, fig_irregular.{pdf,png}}
+  irregular_3seeds: the same experiment over 3 seeds (LNN/RNN/LSTM/NO), + AUC 5y and C -> results/posthoc/{irreg3_metrics.csv, irreg3_tests.csv}
+  querystep       : re-runs saved crossvalidation checkpoints at 3 query-grid resolutions (no training) -> results/posthoc/querystep/{querystep_metrics.csv, querystep_tests.csv, check_reproduce_saved.json, querystep_info.json, fig_querystep_example.{pdf,png}}
 
 Can be run on its own or through scripts/driver.sh:
   python -m scripts.posthoc onset
+  python -m scripts.posthoc onset_class
+  python -m scripts.posthoc late_per_seed
+  python -m scripts.posthoc onset_by_grade
   python -m scripts.posthoc figs
   python -m scripts.posthoc bygrade
+  python -m scripts.posthoc ablation_extra
   python -m scripts.posthoc explain59
   python -m scripts.posthoc irregular
+  python -m scripts.posthoc irregular_3seeds
   python -m scripts.posthoc querystep
 """
 import json
@@ -22,11 +32,11 @@ import numpy as np, pandas as pd, torch
 import matplotlib; matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from scipy.stats import mannwhitneyu, wilcoxon
-from glance.config import RESULTS_CV, RESULTS_FINAL, RESULTS_EXPLAIN, RESULTS_POSTHOC, DROP_TOL
-from glance.data import SEEDS, FOLDS, rounds, test_pids, load_samples, load_X, V2Dataset, MinMaxNorm
-from glance.evaluate import Scorer, boot_weights, cv_forecasts, cv_seeds, forecasts_from_csv, holm, label, metrics, paired_p, patients, seed_mean, summarise, at, G, cindex_w, wmedian, case_ctrl, valid_times, auc_w
+from glance.config import RESULTS_CV, RESULTS_EVAL, RESULTS_FINAL, RESULTS_EXPLAIN, RESULTS_POSTHOC, DROP_TOL
+from glance.data import SEEDS, FOLDS, rounds, round_data, test_pids, load_samples, load_X, V2Dataset, MinMaxNorm
+from glance.evaluate import Scorer, boot_weights, case_ctrl, cindex_w, cv_forecasts, cv_seeds, first_cross, forecasts_from_csv, holm, label, metrics, paired_p, patients, seed_mean, summarise, at, G, FIX_C, valid_times, auc_w, wmedian
 from glance.models import run_name, build
-from glance.irregular import OUT as IRREG_OUT, MODELS as IRREG_MODELS, SETTINGS as IRREG_SETTINGS, rdir as irreg_rdir
+from glance.irregular import OUT as IRREG_OUT, MODELS as IRREG_MODELS, SETTINGS as IRREG_SETTINGS, build as irreg_build, thin as irreg_thin, rdir as irreg_rdir
 from scripts.explainability import CONCEPTS, SHORT, bh, boot_mean_ci, ig_all, part_C, setup as explain_setup
 from scripts.evaluation import TEST_OUT
 from scripts.figures import PAPER_RCPARAMS, ORANGE
@@ -131,6 +141,133 @@ def onset():
     pd.concat([r[1] for r in res]).to_csv(RESULTS_POSTHOC / "onset_tests.csv", index=False)
     pd.concat([r[2].assign(set=s, threshold=c) for r, s, c in zip(res, ("CV", "TEST", "CV"), (3.5, 3.5, 3.0))]).to_csv(RESULTS_POSTHOC / "onset_per_patient.csv", index=False)
     print("onset summary rows:", sum(len(r[0]) for r in res))
+
+
+OC_KEYS = {"lnn_grade_V4": "GLANCE", "rnn_grade_V4": "RNN V4", "lstm_grade_V4": "LSTM V4", "no_grade_V4": "NO V4"}
+
+
+def _onsetclass_forecasts(setname, PAT):
+    F = {}
+    for k in OC_KEYS:
+        if setname == "CV":
+            Fk, _ = cv_forecasts(k, PAT); F[k] = seed_mean([Fk[s] for s in cv_seeds(k)])
+        else:
+            m, g, v = k.split("_")
+            F[k] = seed_mean([forecasts_from_csv(RESULTS_FINAL / "runs" / run_name(m, 1, v, 0, s) / "predictions_test.csv", PAT) for s in SEEDS])
+    return F
+
+
+def _onsetclass_classify(f, d):
+    v = at(f, G); h = np.where(v >= 3.5)[0]
+    if not len(h):
+        return "missed", np.nan
+    o = G[h[0]]; lo, hi = d["E2_lo"], d["E2_T"]
+    return ("early" if o < lo - 1 else "late" if o > hi + 1 else "on time"), o
+
+
+def onset_class():
+    RESULTS_POSTHOC.mkdir(parents=True, exist_ok=True)
+    PAT = patients(); rows = []
+    for sname, P in (("CV", [p for p in rounds()[0][0] if not PAT[p]["late0"]]), ("TEST", [p for p in test_pids() if not PAT[p]["late0"]])):
+        F = _onsetclass_forecasts(sname, PAT); conv = [p for p in P if PAT[p]["E2"]]
+        for k in OC_KEYS:
+            for p in conv:
+                c, o = _onsetclass_classify(F[k][p], PAT[p]); d = PAT[p]
+                rows.append(dict(set=sname, model=k, pid=p, g0=d["g0"], cls=c, onset=o, lo=d["E2_lo"], hi=d["E2_T"],
+                                 forecast_at_hi=float(at(F[k][p], d["E2_T"])[0])))
+    D = pd.DataFrame(rows); D.to_csv(RESULTS_POSTHOC / "onset_class.csv", index=False)
+    print("onset_class rows:", len(D))
+
+
+LPS_MODELS = ("rnn", "lstm", "no", "lnn")
+LPS_LAB = {"rnn": "RNN + grade", "lstm": "LSTM + grade", "no": "NO + grade", "lnn": "GLANCE (LNN + grade V4)"}
+
+
+def _lps_late_grid(f, d):
+    g = at(f, G); h = np.where(g >= FIX_C)[0]
+    return bool(len(h)) and G[h[0]] > d["E2_T"] + 1
+
+
+def _lps_late_visits(q, d):
+    t, yp = q.t.values, q.y_pred.values; h = np.where(yp >= FIX_C)[0]
+    return bool(len(h)) and t[h[0]] > d["E2_T"] + 1
+
+
+def _lps_row(part, m, conv, flags):
+    n = np.array([sum(fl) for fl in flags]); pct = 100 * n / len(conv)
+    return dict(part=part, model=m, n_conv=len(conv), n_seeds=len(n), late_mean=pct.mean(), late_sd=pct.std(ddof=1) if len(n) > 1 else np.nan,
+                late_pct_per_seed=";".join(f"{x:.1f}" for x in pct), late_n_per_seed="/".join(str(x) for x in n))
+
+
+def late_per_seed():
+    RESULTS_POSTHOC.mkdir(parents=True, exist_ok=True)
+    PAT = patients()
+    Pcv = sorted(p for p in rounds()[0][0] if not PAT[p]["late0"]); Ccv = [p for p in Pcv if PAT[p]["E2"]]
+    Pte = sorted(p for p in test_pids() if not PAT[p]["late0"]); Cte = [p for p in Pte if PAT[p]["E2"]]
+    rows, pending = [], []
+    for m in LPS_MODELS:
+        F, _ = cv_forecasts(f"{m}_grade_V4", PAT); assert sorted(F) == list(SEEDS)
+        rows.append(_lps_row("CV fixed grid", m, Ccv, [[_lps_late_grid(F[s][p], PAT[p]) for p in Ccv] for s in SEEDS]))
+    g = rows[-1]; assert f"{g['late_mean']:.1f} +/- {g['late_sd']:.1f}" == "0.8 +/- 1.4", g
+    for m in LPS_MODELS:
+        if not all((irreg_rdir(m, "S0", k, s) / "done.json").exists() for k in FOLDS for s in SEEDS):
+            pending.append(m); continue
+        fl = []
+        for s in SEEDS:
+            D = pd.concat([pd.read_csv(irreg_rdir(m, "S0", k, s) / "predictions_heldout.csv") for k in FOLDS]); Q = dict(list(D.groupby("pid")))
+            assert set(Ccv) <= set(Q)
+            fl.append([_lps_late_visits(Q[p].sort_values("t"), PAT[p]) for p in Ccv])
+        rows.append(_lps_row("CV no grid (S0)", m, Ccv, fl))
+    for m in LPS_MODELS:
+        fl = []
+        for s in SEEDS:
+            F = forecasts_from_csv(RESULTS_FINAL / "runs" / run_name(m, 1, "V4", 0, s) / "predictions_test.csv", PAT, set(Pte))
+            fl.append([_lps_late_grid(F[p], PAT[p]) for p in Cte])
+        rows.append(_lps_row("TEST fixed grid", m, Cte, fl))
+    R = pd.DataFrame(rows); R.to_csv(RESULTS_POSTHOC / "late_per_seed.csv", index=False)
+    print("late_per_seed rows:", len(R), "| pending (S0 runs not finished):", pending or "none")
+
+
+OBG_MODELS = ("rnn", "lstm", "no", "lnn")
+OBG_GRADES = (0, 1, 2, 3)
+OBG_CNT = ["n_progressors", "on_time", "early", "late", "missed", "n_stable", "false_alerts", "false_alerts_any"]
+
+
+def _obg_classify(pr, d):
+    if not np.isfinite(pr):
+        return "missed"
+    if pr < d["E2_lo"] - 1:
+        return "early"
+    if pr > d["E2_T"] + 1:
+        return "late"
+    return "on_time"
+
+
+def onset_by_grade():
+    PAT = patients(); P = sorted(p for p in rounds()[0][0] if not PAT[p]["late0"])
+    assert set(PAT[p]["g0"] for p in P) <= set(OBG_GRADES)
+    rows = []
+    for m in OBG_MODELS:
+        F, _ = cv_forecasts(f"{m}_grade_V4", PAT); assert sorted(F) == list(SEEDS)
+        for s in SEEDS:
+            for g in OBG_GRADES:
+                r = dict(model=m, seed=s, first_grade=g, **{c: 0 for c in OBG_CNT})
+                for p in (p for p in P if PAT[p]["g0"] == g):
+                    d = PAT[p]; pr = first_cross(at(F[s][p], G), FIX_C)
+                    if d["E2"]:
+                        r["n_progressors"] += 1; r[_obg_classify(pr, d)] += 1
+                    else:
+                        r["n_stable"] += 1; r["false_alerts"] += int(pr <= d["last"]); r["false_alerts_any"] += int(np.isfinite(pr))
+                assert r["on_time"] + r["early"] + r["late"] + r["missed"] == r["n_progressors"]
+                rows.append(r)
+    R = pd.DataFrame(rows); R.to_csv(RESULTS_POSTHOC / "onset_by_grade.csv", index=False)
+
+    LP = pd.read_csv(RESULTS_POSTHOC / "late_per_seed.csv"); LP = LP[LP.part == "CV fixed grid"].set_index("model")
+    for m in OBG_MODELS:
+        T = R[R.model == m]; pooled = 100 * T.late.sum() / T.n_progressors.sum()
+        ref = LP.loc[m, "late_mean"]; n_ref = "/".join(str(T[T.seed == s].late.sum()) for s in SEEDS)
+        assert abs(pooled - ref) < 1e-9 and n_ref == LP.loc[m, "late_n_per_seed"], (m, pooled, ref)
+    print("onset_by_grade rows:", len(R))
 
 
 XA = np.round(np.arange(-8, 4.0001, 0.25), 2); MINN = 5
@@ -253,6 +390,63 @@ def bygrade():
     print("bygrade done")
 
 
+@torch.no_grad()
+def _ae_score5(model, ds, dev):
+    out = {}
+    for i in range(len(ds)):
+        x, t, _, _ = ds[i]
+        q = torch.unique(torch.cat([t, torch.tensor([5.0])]), sorted=True)
+        p = model(x[None].to(dev), q[None].to(dev))
+        p = p[0] if isinstance(p, tuple) else p
+        out[ds.s.pid.iloc[i]] = float(p[0, int(torch.nonzero(torch.isclose(q, torch.tensor(5.0)))[0])])
+    return out
+
+
+def _ae_part1(PAT, P, dev):
+    case, ctrl = case_ctrl(PAT, P, "E2", 5.0); W = boot_weights(len(P)); ONE = np.ones((1, len(P))); rows = []
+    for m in ("lnn", "tlstm", "no"):
+        for s in IRREG_SETTINGS:
+            sc = {}
+            for k in FOLDS:
+                D = round_data(k); ho = irreg_thin(D["heldout_first"], IRREG_SETTINGS[s])
+                mod = irreg_build(m, 1025).to(dev); mod.load_state_dict(torch.load(irreg_rdir(m, s, k) / "best.pt", map_location=dev)["model_state_dict"]); mod.eval()
+                sc.update(_ae_score5(mod, V2Dataset(ho, D["X"], D["scaler"], 1), dev))
+            v = np.array([sc[p] for p in P]); b = auc_w(v, case, ctrl, W)
+            rows.append(dict(model=m, setting=s, auc5=auc_w(v, case, ctrl, ONE)[0], lo=np.nanpercentile(b, 2.5), hi=np.nanpercentile(b, 97.5),
+                             n_cases=int(case.sum()), n_controls=int(ctrl.sum())))
+    T = pd.DataFrame(rows); T.to_csv(IRREG_OUT / "auc5_nogrid.csv", index=False)
+    M = pd.read_csv(RESULTS_EVAL / "cv" / "metrics_cv.csv")
+    ref = {m: M[(M.model == f"{m}_grade_V4") & (M.metric == "auc5_E2")].per_seed.iloc[0].split(";")[0] for m in ("lnn", "no")}
+    return T, ref, int(case.sum()), int(ctrl.sum())
+
+
+def _ae_part2(PAT, P):
+    conv = [p for p in P if PAT[p]["E2"]]; rows = []
+    for v in ("V0", "V1", "V2", "V3", "V4"):
+        F, _ = cv_forecasts(f"lnn_grade_{v}", PAT); per = []
+        for s in SEEDS:
+            rising = np.mean([(at(F[s][p], 10.0)[0] - at(F[s][p], 8.0)[0]) / 2 > 0.1 for p in P])
+            late = []
+            for p in conv:
+                g = at(F[s][p], G); h = np.where(g >= 3.5)[0]
+                late.append(bool(len(h)) and G[h[0]] > PAT[p]["E2_T"] + 1)
+            per.append((100 * rising, 100 * np.mean(late)))
+        per = np.array(per)
+        rows.append(dict(variant=v, rising_mean=per[:, 0].mean(), rising_sd=per[:, 0].std(ddof=1), late_mean=per[:, 1].mean(), late_sd=per[:, 1].std(ddof=1),
+                         rising_per_seed=";".join(f"{x:.1f}" for x in per[:, 0]), late_per_seed=";".join(f"{x:.1f}" for x in per[:, 1])))
+    D = pd.DataFrame(rows); D.to_csv(RESULTS_POSTHOC / "ablation_extra.csv", index=False)
+    return D, len(conv)
+
+
+def ablation_extra():
+    RESULTS_POSTHOC.mkdir(parents=True, exist_ok=True); IRREG_OUT.mkdir(parents=True, exist_ok=True)
+    dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    PAT = patients(); P = sorted(p for p in rounds()[0][0] if not PAT[p]["late0"])
+    T, ref, nca, nco = _ae_part1(PAT, P, dev); D, nconv = _ae_part2(PAT, P)
+    print("ablation_extra: auc5_nogrid rows", len(T), f"(n_cases={nca}, n_controls={nco})",
+          "| ablation_extra rows", len(D), f"(n_conv={nconv})")
+
+
 def explain59():
     RESULTS_POSTHOC.mkdir(parents=True, exist_ok=True)
     PAT = patients()
@@ -335,25 +529,71 @@ def irregular():
     M = pd.DataFrame(rows); M.to_csv(IRREG_OUT / "irreg_metrics.csv", index=False)
     T = []
     for met in ("mae", "ontime"):
-        for b in ("rnn", "lstm", "tlstm"):
+        for b in ("rnn", "lstm", "tlstm", "no"):
             ca = R[("lnn", "S50")][met][0] - R[("lnn", "S0")][met][0]; cb = R[(b, "S50")][met][0] - R[(b, "S0")][met][0]
             d = (B[("lnn", "S50")][met] - B[("lnn", "S0")][met]) - (B[(b, "S50")][met] - B[(b, "S0")][met])
             T.append(dict(metric=met, a="lnn", b=b, change_a=ca, change_b=cb, diff=ca - cb, lo=np.nanpercentile(d, 2.5), hi=np.nanpercentile(d, 97.5), p=paired_p(d)))
     T = pd.DataFrame(T); T["p_holm"] = holm(T.p.values); T.to_csv(IRREG_OUT / "irreg_tests.csv", index=False)
+    nmodels = len(IRREG_MODELS)
     plt.rcParams.update(PAPER_RCPARAMS)
     fig, axs = plt.subplots(1, 2, figsize=(3.4, 1.9))
     for ax, met, yl in ((axs[0], "mae", "MAE (grade)"), (axs[1], "ontime", "On time (%)")):
         for j, (s, col, hatch) in enumerate((("S0", ORANGE, ""), ("S50", "#F3C8A8", "///"))):
             r = [M[(M.model == m) & (M.metric == met)].iloc[0] for m in IRREG_MODELS]
             v = np.array([x[s] for x in r]); lo = np.array([x[s + "_lo"] for x in r]); hi = np.array([x[s + "_hi"] for x in r])
-            ax.bar(np.arange(4) + (j - 0.5) * 0.38, v, 0.38, yerr=[v - lo, hi - v], capsize=1.5, color=col, hatch=hatch, edgecolor="#333333", lw=0.4,
+            ax.bar(np.arange(nmodels) + (j - 0.5) * 0.38, v, 0.38, yerr=[v - lo, hi - v], capsize=1.5, color=col, hatch=hatch, edgecolor="#333333", lw=0.4,
                    error_kw=dict(lw=0.6), label={"S0": "All visits (S0)", "S50": "50% visits dropped (S50)"}[s])
-        ax.set_xticks(range(4)); ax.set_xticklabels(["LNN", "RNN", "LSTM", "T-LSTM"], rotation=30, ha="right"); ax.set_ylabel(yl)
+        ax.set_xticks(range(nmodels)); ax.set_xticklabels(["LNN", "RNN", "LSTM", "T-LSTM", "NO"][:nmodels], rotation=30, ha="right"); ax.set_ylabel(yl)
     axs[0].text(-0.02, 1.03, "a)", transform=axs[0].transAxes, va="bottom"); axs[1].text(-0.02, 1.03, "b)", transform=axs[1].transAxes, va="bottom")
     h, l = axs[0].get_legend_handles_labels(); fig.legend(h, l, loc="lower center", ncol=2, frameon=False, bbox_to_anchor=(0.53, 0.0), handlelength=1.4, columnspacing=0.8)
     fig.subplots_adjust(left=0.13, right=0.98, top=0.90, bottom=0.36, wspace=0.42)
     fig.savefig(IRREG_OUT / "fig_irregular.pdf"); fig.savefig(IRREG_OUT / "fig_irregular.png", dpi=300); plt.close(fig)
     print("irregular done:", len(M), "metric rows,", len(T), "tests")
+
+
+I3_MODELS = ("lnn", "rnn", "lstm", "no"); I3_SEEDS = (0, 1, 2)
+
+
+def _i3_load(m, s, sd, PAT):
+    D = pd.concat([pd.read_csv(irreg_rdir(m, s, f, sd) / "predictions_heldout.csv") for f in FOLDS])
+    return {p: (q.t.values, q.y_true.values, q.y_pred.values) for p, q in D.groupby("pid") if p in PAT}
+
+
+def _i3_auc5(m, s, sd, P, case, ctrl, W, dev):
+    if m in ("rnn", "lstm"):
+        return np.full(W.shape[0], np.nan), np.nan
+    sc = {}
+    for k in FOLDS:
+        D = round_data(k); ho = irreg_thin(D["heldout_first"], IRREG_SETTINGS[s], seed=sd)
+        mod = irreg_build(m, 1025).to(dev); mod.load_state_dict(torch.load(irreg_rdir(m, s, k, sd) / "best.pt", map_location=dev)["model_state_dict"]); mod.eval()
+        sc.update(_ae_score5(mod, V2Dataset(ho, D["X"], D["scaler"], 1), dev))
+    v = np.array([sc[p] for p in P])
+    return auc_w(v, case, ctrl, W), auc_w(v, case, ctrl, np.ones((1, len(P))))[0]
+
+
+def irregular_3seeds():
+    RESULTS_POSTHOC.mkdir(parents=True, exist_ok=True)
+    dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    PAT = patients(); P = sorted(p for p in rounds()[0][0] if not PAT[p]["late0"]); W = boot_weights(len(P)); ONE = np.ones((1, len(P)))
+    case, ctrl = case_ctrl(PAT, P, "E2", 5.0)
+    V, B, rows = {}, {}, []
+    runs = [(m, sd) for m in I3_MODELS for sd in I3_SEEDS] + [("tlstm", 0)]
+    for m, sd in runs:
+        for s in IRREG_SETTINGS:
+            D = _irreg_per_patient(_i3_load(m, s, sd, PAT), PAT, P)
+            V[(m, s, sd)] = {k: v[0] for k, v in _irreg_metrics(D, ONE).items()}; B[(m, s, sd)] = _irreg_metrics(D, W)
+            ab, a1 = _i3_auc5(m, s, sd, P, case, ctrl, W, dev); V[(m, s, sd)]["auc5"] = a1; B[(m, s, sd)]["auc5"] = ab
+            rows.append(dict(model=m, setting=s, seed=sd, **V[(m, s, sd)]))
+        print("done", m, sd, flush=True)
+    R = pd.DataFrame(rows); R.to_csv(RESULTS_POSTHOC / "irreg3_metrics.csv", index=False)
+    T = []
+    for met in ("mae", "ontime"):
+        for b in ("rnn", "lstm", "no"):
+            ch = lambda m, X: np.mean([X[(m, "S50", sd)][met] - X[(m, "S0", sd)][met] for sd in I3_SEEDS], 0)
+            d = ch("lnn", B) - ch(b, B); pa, pb = ch("lnn", V), ch(b, V)
+            T.append(dict(metric=met, other=b, change_glance=pa, change_other=pb, diff=pa - pb, lo=np.nanpercentile(d, 2.5), hi=np.nanpercentile(d, 97.5), p=paired_p(d)))
+    T = pd.DataFrame(T); T["p_holm"] = holm(T.p.values); T.to_csv(RESULTS_POSTHOC / "irreg3_tests.csv", index=False)
+    print("irregular_3seeds done:", len(R), "metric rows,", len(T), "tests")
 
 
 QSTEPS = (0.5, 1.0, 0.25); QMODELS = ("lnn", "rnn", "lstm", "no"); QLAB = {"lnn": "LNN (GLANCE)", "rnn": "RNN", "lstm": "LSTM", "no": "NO"}
@@ -380,7 +620,6 @@ def _qinfer(mod, name, x, step, dev):
 
 
 def _qlookup(traj, step, t):
-    """value at time t: exact grid point, or for steps that miss t the grid point at or before t."""
     g = _qgrid(step); i = np.searchsorted(g, np.asarray(t) + 1e-9) - 1
     return traj[..., np.clip(i, 0, len(g) - 1)]
 
@@ -411,7 +650,6 @@ def querystep():
     print("max |0.5-y rerun - saved| =", max(chk.values()), flush=True)
 
     def metr(traj, st, Pl, W=None):
-        """traj: pid -> array on grid(st). Returns dict of metrics (W: bootstrap weights for MAE only)."""
         sabs, nv = [], []
         for p in Pl:
             d = PAT[p]; k = (d["t"] > 0) & (d["t"] <= 10 + 1e-9)
@@ -479,7 +717,9 @@ def querystep():
 
 def main():
     cmd = sys.argv[1]
-    {"onset": onset, "figs": figs, "bygrade": bygrade, "explain59": explain59, "irregular": irregular, "querystep": querystep}[cmd]()
+    {"onset": onset, "onset_class": onset_class, "late_per_seed": late_per_seed, "onset_by_grade": onset_by_grade,
+     "figs": figs, "bygrade": bygrade, "ablation_extra": ablation_extra, "explain59": explain59,
+     "irregular": irregular, "irregular_3seeds": irregular_3seeds, "querystep": querystep}[cmd]()
 
 
 if __name__ == "__main__":
