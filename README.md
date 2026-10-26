@@ -1,4 +1,4 @@
-<h1 align="center">A GLANCE into the Future: Grade-Anchored Liquid AMD Network for Continuous-Time Evolution of AMD Progression from Fundus Images</h1>
+<h1 align="center">A GLANCE into the Future: Grade-Guided Liquid AMD Network for Continuous-Time Evolution of AMD Progression from Fundus Images</h1>
 
 <!--
 <p align="center">
@@ -29,14 +29,14 @@
 ## Abstract
 
 Age-related macular degeneration (AMD) progresses at variable rates, and forecasting late AMD onset is critical for patient management.
-Rather than predicting binary risk at fixed horizons, we forecast the full grade trajectory from a single fundus visit using **GLANCE**, *Grade-anchored Liquid AMD Network for Continuous-time Evolution*.
+Rather than predicting binary risk at fixed horizons, we forecast the full grade trajectory from a single fundus visit using **GLANCE**, *Grade-guided Liquid AMD Network for Continuous-time Evolution*.
 
 ![Framework](./figures/framework_dark.png#gh-dark-mode-only)
 ![Framework](./figures/framework_light.png#gh-light-mode-only)
 
  
 Our contributions are:
-- We formulate AMD progression as a **grade-anchored continuous-time trajectory forecasting**: frozen RET-CLIP features of both eyes, $\mathbf{z_\mathrm{LE}}$ and $\mathbf{z_\mathrm{RE}}$, and the current grade, $s$, condition a closed-form Liquid Neural Network queried at any time.
+- We formulate AMD progression as a **grade-guided continuous-time trajectory forecasting**: frozen RET-CLIP features of both eyes, $\mathbf{z_\mathrm{LE}}$ and $\mathbf{z_\mathrm{RE}}$, and the current grade, $s$, condition a closed-form Liquid Neural Network queried at any time.
 - We introduce a **progression penalty** against decreasing forecasts, with **horizon weighting** and a **robust slope loss** for distant follow-up and progression speed.
 - On AREDS dataset, with a pre-specified protocol, we show that the penalty removes implausible forecasts at comparable error, and that trajectory forecasters match fixed-horizon baselines on late AMD prediction while estimating **onset time**.
 
