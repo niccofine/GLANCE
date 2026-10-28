@@ -84,6 +84,7 @@ The repository is **organized** into Python scripts and source code contained in
 │   ├── tests.py                  # unit tests
 │   └── driver.sh                 # runs every step above in order
 ├── src/glance/
+│   ├── annual.py                 # annual-grid training experiment (posthoc)
 │   ├── config.py                 # paths and constants
 │   ├── data.py                   # cohort, sample, split loading, cross-validation, dataset
 │   ├── models.py                 # architectures, loss, training loop, GPU queue

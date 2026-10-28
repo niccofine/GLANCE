@@ -1,33 +1,44 @@
 """Post-pipeline analyses (no training; saved forecasts and saved explainability outputs only). Cross-validation out-of-fold = primary; test set = descriptive only.
-  onset           : onset timing  -> results/posthoc/onset_{summary,tests,per_patient}.csv
-  onset_class     : 4-way onset classification (on time / early / late / missed), by first-grade stratum -> results/posthoc/onset_class.csv
-  late_per_seed   : "% late" onset error per seed (not pooled), cross-validation fixed grid / no grid (S0) / test -> results/posthoc/late_per_seed.csv
-  onset_by_grade  : the same onset-timing errors broken out by starting grade -> results/posthoc/onset_by_grade.csv
-  figs            : converters aligned at onset, non-converters by first grade -> results/posthoc/table_{converters_aligned,nonconverters}.csv
-  bygrade         : discrimination within first-grade strata -> results/posthoc/bygrade_{metrics,tests}.csv
-  ablation_extra  : no-grid AUC 5y for the irregular-visit experiment + loss-ablation V0-V4 rising/late stats -> results/posthoc/{irregular/auc5_nogrid.csv,ablation_extra.csv}
-  explain59       : explainability -> results/posthoc/{A_shares_eval59.json, B2_concepts_eval59.csv, C_macula_eval59.csv, C_maps_eval59.npz, explain_summary_eval59.json}
-  irregular       : evaluation of the irregular-visit training experiment, seed 0, 5 backbones -> results/posthoc/irregular/{irreg_metrics.csv, irreg_tests.csv, fig_irregular.{pdf,png}}
-  irregular_3seeds: the same experiment over 3 seeds (LNN/RNN/LSTM/NO), + AUC 5y and C -> results/posthoc/{irreg3_metrics.csv, irreg3_tests.csv}
-  querystep       : re-runs saved crossvalidation checkpoints at 3 query-grid resolutions (no training) -> results/posthoc/querystep/{querystep_metrics.csv, querystep_tests.csv, check_reproduce_saved.json, querystep_info.json, fig_querystep_example.{pdf,png}}
+  onset                : onset timing  -> results/posthoc/onset_{summary,tests,per_patient}.csv
+  onset_class          : 4-way onset classification (on time / early / late / missed), by first-grade stratum -> results/posthoc/onset_class.csv
+  late_per_seed        : "% late" onset error per seed (not pooled), cross-validation fixed grid / no grid (S0) / test -> results/posthoc/late_per_seed.csv
+  onset_by_grade       : the same onset-timing errors broken out by starting grade -> results/posthoc/onset_by_grade.csv
+  figs                 : converters aligned at onset, non-converters by first grade -> results/posthoc/table_{converters_aligned,nonconverters}.csv
+  bygrade              : discrimination within first-grade strata -> results/posthoc/bygrade_{metrics,tests}.csv
+  ablation_extra       : no-grid AUC 5y for the irregular-visit experiment + loss-ablation V0-V4 rising/late stats -> results/posthoc/{irregular/auc5_nogrid.csv,ablation_extra.csv}
+  explain59            : explainability -> results/posthoc/{A_shares_eval59.json, B2_concepts_eval59.csv, C_macula_eval59.csv, C_maps_eval59.npz, explain_summary_eval59.json}
+  irregular            : evaluation of the irregular-visit training experiment, seed 0, 5 backbones -> results/posthoc/irregular/{irreg_metrics.csv, irreg_tests.csv, fig_irregular.{pdf,png}}
+  irregular_3seeds     : the same experiment over 3 seeds (LNN/RNN/LSTM/NO), + AUC 5y and C -> results/posthoc/{irreg3_metrics.csv, irreg3_tests.csv}
+  querystep            : re-runs saved crossvalidation checkpoints at 3 query-grid resolutions (no training) -> results/posthoc/querystep/{querystep_metrics.csv, querystep_tests.csv, check_reproduce_saved.json, querystep_info.json, fig_querystep_example.{pdf,png}}
+  offgrid_step0        : visit-time grid checks -> results/posthoc/offgrid/step0.json
+  offgrid_unseen_visits: forecasts at unseen (dropped) visit dates, no-grid -50% irregular-visit models (glance.irregular), 3 seeds -> results/posthoc/offgrid/{unseen_per_seed.csv, unseen_points.csv.gz, unseen_tests.csv}
+  offgrid_annual_grid  : annual-grid RNN / LSTM vs the existing 6-month V4 cross-validation runs -> results/posthoc/offgrid/annual_per_seed.csv
+  offgrid_monthly      : fixed-grid V4 GLANCE / NO CV checkpoints queried monthly (0-10 y, step 1/12 y) vs their saved 6-month forecasts -> results/posthoc/offgrid/{monthly_per_seed.csv, monthly_tests.csv, monthly_check_6m_points.csv}
+  progression_metrics  : progression metrics, saved forecasts only -> results/posthoc/progression_{per_seed,tests}_{cv,test}.csv
 
 Can be run on its own or through scripts/driver.sh:
-  python -m scripts.posthoc onset
-  python -m scripts.posthoc onset_class
-  python -m scripts.posthoc late_per_seed
-  python -m scripts.posthoc onset_by_grade
-  python -m scripts.posthoc figs
-  python -m scripts.posthoc bygrade
-  python -m scripts.posthoc ablation_extra
-  python -m scripts.posthoc explain59
-  python -m scripts.posthoc irregular
-  python -m scripts.posthoc irregular_3seeds
-  python -m scripts.posthoc querystep
+    python -m scripts.posthoc onset
+    python -m scripts.posthoc onset_class
+    python -m scripts.posthoc late_per_seed
+    python -m scripts.posthoc onset_by_grade
+    python -m scripts.posthoc figs
+    python -m scripts.posthoc bygrade
+    python -m scripts.posthoc ablation_extra
+    python -m scripts.posthoc explain59
+    python -m scripts.posthoc irregular
+    python -m scripts.posthoc irregular_3seeds
+    python -m scripts.posthoc querystep
+    python -m scripts.posthoc offgrid_step0
+    python -m scripts.posthoc offgrid_unseen_visits
+    python -m scripts.posthoc offgrid_annual_grid
+    python -m scripts.posthoc offgrid_monthly
+    python -m scripts.posthoc progression_metrics
 """
 import json
 import pickle
 import shutil
 import sys
+import time
 import numpy as np, pandas as pd, torch
 import matplotlib; matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -37,6 +48,7 @@ from glance.data import SEEDS, FOLDS, rounds, round_data, test_pids, load_sample
 from glance.evaluate import Scorer, boot_weights, case_ctrl, cindex_w, cv_forecasts, cv_seeds, first_cross, forecasts_from_csv, holm, label, metrics, paired_p, patients, seed_mean, summarise, at, G, FIX_C, valid_times, auc_w, wmedian
 from glance.models import run_name, build
 from glance.irregular import OUT as IRREG_OUT, MODELS as IRREG_MODELS, SETTINGS as IRREG_SETTINGS, build as irreg_build, thin as irreg_thin, rdir as irreg_rdir
+from glance.annual import rdir as annual_rdir
 from scripts.explainability import CONCEPTS, SHORT, bh, boot_mean_ci, ig_all, part_C, setup as explain_setup
 from scripts.evaluation import TEST_OUT
 from scripts.figures import PAPER_RCPARAMS, ORANGE
@@ -715,11 +727,334 @@ def querystep():
     print(D.pivot_table(index=["model", "step"], columns="metric", values="mean").round(3).to_string()); print(T.to_string()); print("example", ex)
 
 
+OFFGRID_OUT = RESULTS_POSTHOC / "offgrid"
+OG_DBINS = (("< 1 y", 0, 1), ("1-2 y", 1, 2), ("> 2 y", 2, np.inf))
+OG_MONTH = np.round(np.arange(121) / 12, 6)
+
+
+def _og_cohort():
+    PAT = patients(); P = sorted(p for p in rounds()[0][0] if not PAT[p]["late0"])
+    return PAT, P
+
+
+def _og_batched(model, x, qs, bs=256):
+    out = []
+    for i in range(0, len(qs), bs):
+        Q = qs[i:i + bs]; L = max(len(q) for q in Q)
+        q = torch.tensor(np.stack([np.r_[q, np.full(L - len(q), q[-1])] for q in Q]), dtype=torch.float32)
+        xx = x[i:i + bs] if x.dim() == 2 and x.size(0) == len(qs) else x
+        with torch.no_grad():
+            p = model(xx, q); p = p[0] if isinstance(p, tuple) else p
+        out += [p[j, :len(Q[j])].numpy() for j in range(len(Q))]
+    return out
+
+
+def _og_onset_rows(alarm, PAT, P):
+    R = []
+    for p in P:
+        d = PAT[p]; al = alarm[p]; E = d["E2"]; r = dict(E=E)
+        if E:
+            lo, hi = d["E2_lo"], d["E2_T"]; det = np.isfinite(al)
+            r.update(det=det, ont=det and lo - 1 <= al <= hi + 1, dist=max(lo - al, 0, al - hi) if det else np.nan, late=det and al > hi + 1, fa=False)
+        else:
+            r.update(det=False, ont=False, dist=np.nan, late=False, fa=bool(al <= d["last"]))
+        R.append(r)
+    return pd.DataFrame(R)
+
+
+def _og_onset_metrics(D, W):
+    E = D.E.values.astype(bool); det = D.det.values.astype(bool); out = {}
+    with np.errstate(all="ignore"):
+        out["det"] = 100 * (W @ det) / (W @ E); out["ontime"] = 100 * (W @ D.ont.values.astype(bool)) / (W @ E)
+        out["late"] = 100 * (W @ D.late.values.astype(bool)) / (W @ E); out["fa"] = 100 * (W @ D.fa.values.astype(bool)) / (W @ ~E)
+    out["d"] = np.array([wmedian(D.dist.values[det], w[det]) for w in W])
+    return out
+
+
+def _og_grid_metrics(F, PAT, P, W):
+    sabs, nv, down, risk, s5 = [], [], [], [], []; al = {}
+    for p in P:
+        gt, gp, vt, vp = F[p]; d = PAT[p]; k = vt > 0
+        sabs.append(np.abs(vp[k] - d["y"][k]).sum()); nv.append(k.sum())
+        g = (gt >= -1e-9) & (gt <= 10 + 1e-9); gg, gv = gt[g], gp[g]
+        down.append(float(np.any(np.diff(gv) < -DROP_TOL)))
+        tt = np.r_[gt[gt <= d["last"] + 1e-9], vt]; vv = np.r_[gp[gt <= d["last"] + 1e-9], vp]
+        risk.append(np.max(vv)); s5.append(float(np.interp(5.0, gt, gp)))
+        h = np.where(gv >= FIX_C)[0]; al[p] = gg[h[0]] if len(h) else np.inf
+    sabs, nv, down = map(np.asarray, (sabs, nv, down)); out = {}
+    with np.errstate(all="ignore"):
+        out["mae"] = (W @ sabs) / (W @ nv); out["down"] = 100 * (W @ down) / W.sum(1)
+    case, ctrl = case_ctrl(PAT, P, "E2", 5.0); out["auc5"] = auc_w(np.array(s5), case, ctrl, W)
+    out["c"] = cindex_w([PAT[p]["E2_T"] for p in P], [PAT[p]["E2"] for p in P], np.array(risk), W)
+    out.update(_og_onset_metrics(_og_onset_rows(al, PAT, P), W))
+    return out, al
+
+
+def offgrid_step0():
+    OFFGRID_OUT.mkdir(parents=True, exist_ok=True)
+    S = load_samples(); C = S[S.pid.isin(set(rounds()[0][0]))]; res = {}
+    for name, sub in (("first_visit_trajectories", C[C["first"]]), ("all_starting_samples", C)):
+        t = np.concatenate([a[a > 0] for a in sub.t]); i = np.isclose(t, np.round(t))
+        res[name] = dict(patients=int(sub.pid.nunique()), samples=len(sub), followup_visits=len(t), integer_years=int(i.sum()),
+                         half_years=int((~i).sum()), pct_integer=100 * i.mean(), pct_half=100 * (~i).mean())
+    PAT, P = _og_cohort(); res["S50_dropped_per_seed"] = {}
+    for sd in SEEDS:
+        nk = nd = 0
+        for k in FOLDS:
+            H = round_data(k)["heldout_first"]; H = H[H.pid.isin(P)]; T = irreg_thin(H, 0.5, seed=sd)
+            nk += sum((a > 0).sum() for a in T.t); nd += sum((a > 0).sum() for a in H.t) - sum((a > 0).sum() for a in T.t)
+        res["S50_dropped_per_seed"][sd] = dict(kept_future=int(nk), dropped=int(nd))
+    json.dump(res, open(OFFGRID_OUT / "step0.json", "w"), indent=1)
+    print("offgrid_step0:", json.dumps(res, indent=1))
+
+
+def offgrid_unseen_visits():
+    OFFGRID_OUT.mkdir(parents=True, exist_ok=True)
+    dev = torch.device("cpu")
+    t0 = time.time(); PAT, P = _og_cohort(); Ps = set(P)
+    models = ["lnn", "no", "rnn", "lstm"] + (["tlstm"] if all((irreg_rdir("tlstm", "S50", k, s) / "done.json").exists() for k in FOLDS for s in SEEDS) else [])
+    tl_seeds = [s for s in SEEDS if all((irreg_rdir("tlstm", "S50", k, s) / "done.json").exists() for k in FOLDS)]
+    if "tlstm" not in models and tl_seeds:
+        models.append("tlstm")
+    RD = {k: round_data(k) for k in FOLDS}
+    pts, chk = [], []
+    for m in models:
+        for sd in (SEEDS if m != "tlstm" else tl_seeds):
+            for k in FOLDS:
+                D = RD[k]; full = D["heldout_first"]; full = full[full.pid.isin(Ps)].reset_index(drop=True); kept = irreg_thin(full, 0.5, seed=sd)
+                sv = pd.read_csv(irreg_rdir(m, "S50", k, sd) / "predictions_heldout.csv"); sv = {p: q.sort_values("t") for p, q in sv.groupby("pid")}
+                ds = V2Dataset(kept, D["X"], D["scaler"], 1)
+                direct = m in ("lnn", "no", "tlstm")
+                if direct:
+                    mod = irreg_build(m, 1025); mod.load_state_dict(torch.load(irreg_rdir(m, "S50", k, sd) / "best.pt", map_location=dev)["model_state_dict"]); mod.eval()
+                xs, qs, meta = [], [], []
+                for i, r in kept.iterrows():
+                    ft, fy = full.loc[i, "t"], full.loc[i, "y"]; kt = r.t
+                    q = sv[r.pid]; assert np.allclose(q.t.values, kt), (m, sd, r.pid)
+                    kp = q.y_pred.values
+                    for tt, pp, yy in zip(kt, kp, r.y):
+                        pts.append(dict(model=m, seed=sd, pid=r.pid, t=float(tt), y_true=float(yy), kind="kept", interp=pp, carry=pp, direct=pp, dist=0.0))
+                    drop = [(tt, yy) for tt, yy in zip(ft, fy) if not np.any(np.isclose(kt, tt))]
+                    for tt, yy in drop:
+                        cf = kp[np.where(kt <= tt + 1e-9)[0][-1]]
+                        pts.append(dict(model=m, seed=sd, pid=r.pid, t=float(tt), y_true=float(yy), kind="dropped", interp=float(np.interp(tt, kt, kp)),
+                                        carry=float(cf), direct=np.nan, dist=float(np.min(np.abs(kt - tt)))))
+                        if direct:
+                            xs.append(ds.x[i]); qs.append(np.sort(np.r_[kt, tt]).astype(np.float32)); meta.append((len(pts) - 1, tt))
+                    if direct and i == 0:
+                        p0 = _og_batched(mod, ds.x[i][None], [kt.astype(np.float32)])[0]; chk.append(dict(model=m, seed=sd, fold=k, max_abs=float(np.max(np.abs(p0 - kp)))))
+                if direct and qs:
+                    outs = _og_batched(mod, torch.stack(xs), qs)
+                    for (j, tt), o, q in zip(meta, outs, qs):
+                        pts[j]["direct"] = float(o[int(np.argmin(np.abs(q - tt)))])
+            print(f"offgrid_unseen_visits {m} seed {sd} done ({time.time() - t0:.0f}s)", flush=True)
+    X = pd.DataFrame(pts); X.to_csv(OFFGRID_OUT / "unseen_points.csv.gz", index=False)
+    C = pd.DataFrame(chk); print("kept-visit reproduction max |diff|:", C.max_abs.max(), flush=True); C.to_csv(OFFGRID_OUT / "unseen_repro_check.csv", index=False)
+    W = boot_weights(len(P)); ONE = np.ones((1, len(P))); idx = {p: i for i, p in enumerate(P)}
+    rows, B = [], {}
+    for (m, sd), g in X.groupby(["model", "seed"]):
+        for meth in (("direct", "interp", "carry", "kept") if m in ("lnn", "no", "tlstm") else ("interp", "carry", "kept")):
+            dr = g[g.kind == "dropped"]; col = "interp" if meth == "kept" else meth
+            res = {}
+            if meth != "kept":
+                e = np.abs(dr[col].values - dr.y_true.values); pi = dr.pid.map(idx).values
+                for name, sel in [("mae_drop", np.ones(len(dr), bool))] + [(f"mae_{b}", (dr.dist.values >= lo) & (dr.dist.values < hi)) for b, lo, hi in OG_DBINS] + \
+                                 [("mae_prog", dr.pid.map(lambda p: PAT[p]["E2"]).values.astype(bool)), ("mae_stable", ~dr.pid.map(lambda p: PAT[p]["E2"]).values.astype(bool))]:
+                    sa = np.bincount(pi[sel], e[sel], len(P)); na = np.bincount(pi[sel], None, len(P)).astype(float)
+                    with np.errstate(all="ignore"):
+                        res[name] = ((W @ sa) / (W @ na), ((ONE @ sa) / (ONE @ na))[0], int(sel.sum()))
+            al = {}
+            for p, q in g.groupby("pid"):
+                q = q if meth != "kept" else q[q.kind == "kept"]
+                q = q.sort_values("t"); v = q[col].values; h = np.where(v >= FIX_C)[0]
+                al[p] = q.t.values[h[0]] if len(h) else np.inf
+            Dd = _og_onset_rows(al, PAT, P); ob, op = _og_onset_metrics(Dd, W), _og_onset_metrics(Dd, ONE)
+            for k in ob:
+                res[k] = (ob[k], op[k][0], int(sum(PAT[p]["E2"] for p in P)))
+            B[(m, meth, sd)] = {k: v[0] for k, v in res.items()}
+            rows.append(dict(model=m, method=meth, seed=sd, **{k: v[1] for k, v in res.items()}, **{f"n_{k}": v[2] for k, v in res.items() if k.startswith("mae")}))
+    R = pd.DataFrame(rows); R.to_csv(OFFGRID_OUT / "unseen_per_seed.csv", index=False)
+    others = [("no", "direct"), ("rnn", "interp"), ("lstm", "interp")] + ([("tlstm", "direct")] if len(tl_seeds) == 3 else [])
+    T = []
+    for met in ("mae_drop", "late"):
+        a = np.mean([B[("lnn", "direct", s)][met] for s in SEEDS], 0)
+        for m, meth in others:
+            b = np.mean([B[(m, meth, s)][met] for s in SEEDS], 0); d = a - b
+            va = R[(R.model == "lnn") & (R.method == "direct")][met].mean(); vb = R[(R.model == m) & (R.method == meth)][met].mean()
+            T.append(dict(metric=met, other=m, other_method=meth, glance=va, other_value=vb, diff=va - vb, lo=np.nanpercentile(d, 2.5), hi=np.nanpercentile(d, 97.5), p=paired_p(d)))
+    T = pd.DataFrame(T); T["p_holm"] = holm(T.p.values); T.to_csv(OFFGRID_OUT / "unseen_tests.csv", index=False)
+    json.dump(dict(models=models, tlstm_seeds=tl_seeds, seconds=time.time() - t0), open(OFFGRID_OUT / "unseen_info.json", "w"), indent=1)
+    print(R.groupby(["model", "method"])[["mae_drop", "late", "ontime"]].mean().round(3).to_string()); print(T.round(4).to_string())
+
+
+def offgrid_annual_grid():
+    OFFGRID_OUT.mkdir(parents=True, exist_ok=True)
+    PAT, P = _og_cohort(); ONE = np.ones((1, len(P))); rows = []
+    for m in ("rnn", "lstm"):
+        for sd in SEEDS:
+            if all((annual_rdir(m, k, sd) / "done.json").exists() for k in FOLDS):
+                A = pd.concat([pd.read_csv(annual_rdir(m, k, sd) / "predictions_heldout.csv") for k in FOLDS]); F = {}
+                for p, q in A.groupby("pid"):
+                    if p in PAT:
+                        gt, gp = q.t.values, q.y_pred.values; assert np.allclose(gt, np.arange(len(gt)))
+                        F[p] = (gt, gp, PAT[p]["t"], np.interp(PAT[p]["t"], gt, gp))
+                o, _ = _og_grid_metrics(F, PAT, P, ONE)
+                ep = [json.load(open(annual_rdir(m, k, sd) / "done.json"))["n_epochs_best"] for k in FOLDS]
+                cf = [json.load(open(annual_rdir(m, k, sd) / "config.json")) for k in FOLDS]
+                rows.append(dict(model=m, grid="annual", seed=sd, **{k: v[0] for k, v in o.items()}, best_epochs=";".join(map(str, ep)),
+                                 train_targets_all=sum(c["train_future_visits_all"] for c in cf), train_targets_integer=sum(c["train_future_visits_integer"] for c in cf)))
+            Fs = {}
+            for k in FOLDS:
+                f = forecasts_from_csv(RESULTS_CV / "runs" / run_name(m, 1, "V4", k, sd) / "predictions_heldout.csv", PAT)
+                Fs.update({p: (v["gt"], v["gp"], v["vt"], v["vp"]) for p, v in f.items()})
+            o, _ = _og_grid_metrics(Fs, PAT, P, ONE)
+            rows.append(dict(model=m, grid="6-month", seed=sd, **{k: v[0] for k, v in o.items()}))
+    R = pd.DataFrame(rows); R.to_csv(OFFGRID_OUT / "annual_per_seed.csv", index=False)
+    M = pd.read_csv(RESULTS_EVAL / "cv" / "metrics_cv.csv"); chk = {}
+    for m in ("rnn", "lstm"):
+        for mine, theirs, sc in (("mae", "mae", 1), ("auc5", "auc5_E2", 1), ("down", "down", 100), ("ontime", "ontime_E2", 100), ("fa", "fa_E2", 100)):
+            ref = np.array([float(x) for x in M[(M.model == f"{m}_grade_V4") & (M.metric == theirs)].per_seed.iloc[0].split(";")]) * sc
+            chk[f"{m}_{mine}"] = float(np.max(np.abs(R[(R.model == m) & (R.grid == "6-month")].sort_values("seed")[mine].values - ref)))
+    json.dump(chk, open(OFFGRID_OUT / "annual_check.json", "w"), indent=1); print("6-month check vs evaluation/cv/metrics_cv.csv:", chk)
+    print(R.groupby(["model", "grid"]).mean(numeric_only=True).round(3).to_string())
+
+
+def offgrid_monthly():
+    OFFGRID_OUT.mkdir(parents=True, exist_ok=True)
+    t0 = time.time(); PAT, P = _og_cohort(); Ps = set(P); W = boot_weights(len(P)); ONE = np.ones((1, len(P)))
+    rows, B, chk = [], {}, []
+    for m in ("lnn", "no"):
+        for sd in SEEDS:
+            Fm, F6 = {}, {}
+            for k in FOLDS:
+                rd = RESULTS_CV / "runs" / run_name(m, 1, "V4", k, sd); D = round_data(k)
+                z = np.load(rd / "scaler.npz"); assert np.allclose(z["data_min"], D["scaler"].min) and np.allclose(z["scale"], D["scaler"].scale)
+                H = D["heldout_first"]; H = H[H.pid.isin(Ps)].reset_index(drop=True); ds = V2Dataset(H, D["X"], D["scaler"], 1)
+                mod = build(m, 1025); mod.load_state_dict(torch.load(rd / "best.pt", map_location="cpu")["model_state_dict"]); mod.eval()
+                with torch.no_grad():
+                    p = mod(ds.x, torch.tensor(OG_MONTH, dtype=torch.float32)[None].expand(len(H), -1)); p = (p[0] if isinstance(p, tuple) else p).numpy()
+                f6 = forecasts_from_csv(rd / "predictions_heldout.csv", PAT, set(H.pid))
+                for i, r in H.iterrows():
+                    f = f6[r.pid]
+                    vt = PAT[r.pid]["t"]; vm = np.interp(vt, OG_MONTH, p[i])
+                    Fm[r.pid] = (OG_MONTH, p[i], vt, np.where(vt <= 10, vm, f["vp"]))
+                    F6[r.pid] = (f["gt"], f["gp"], f["vt"], f["vp"])
+                    j = np.isin(np.round(OG_MONTH, 4), np.round(G, 4)); chk.append(dict(model=m, seed=sd, pid=r.pid, max_abs_6m_points=float(np.max(np.abs(p[i][j] - at(f, G))))))
+            for res, F in (("monthly", Fm), ("6-month", F6)):
+                ob, al = _og_grid_metrics(F, PAT, P, W); op, _ = _og_grid_metrics(F, PAT, P, ONE)
+                rr = []
+                for p in P:
+                    d = PAT[p]
+                    if d["E2"] and np.isfinite(al[p]) and al[p] > 0:
+                        gt, gp = F[p][0], F[p][1]; k = int(np.argmin(np.abs(gt - al[p])))
+                        yE = d["y"][int(np.argmin(np.abs(d["t"] - d["E2_T"])))]
+                        rr.append(dict(pid=p, pred=(gp[k] - gp[0]) / al[p], obs=(yE - d["y"][0]) / d["E2_T"]))
+                rr = pd.DataFrame(rr); ae = (rr.pred - rr.obs).abs().values; pi = rr.pid.map({p: i for i, p in enumerate(P)}).values
+                ob["rate_abserr"] = np.array([wmedian(ae, w[pi]) for w in W])
+                B[(m, res, sd)] = ob
+                rows.append(dict(model=m, resolution=res, seed=sd, **{k: v[0] for k, v in op.items()}, rate_pred_median=float(rr.pred.median()),
+                                 rate_obs_median=float(rr.obs.median()), rate_abserr_median=float(np.median(ae)), n_rate=len(rr)))
+            print(f"offgrid_monthly {m} seed {sd} ({time.time() - t0:.0f}s)", flush=True)
+    R = pd.DataFrame(rows); R.to_csv(OFFGRID_OUT / "monthly_per_seed.csv", index=False)
+    Cc = pd.DataFrame(chk); Cc.groupby("model").max_abs_6m_points.describe().to_csv(OFFGRID_OUT / "monthly_check_6m_points.csv")
+    T = []
+    for met in ("det", "ontime", "d", "late", "fa", "rate_abserr"):
+        a = np.mean([B[("lnn", "monthly", s)][met] for s in SEEDS], 0); b = np.mean([B[("no", "monthly", s)][met] for s in SEEDS], 0); d = a - b
+        va = R[(R.model == "lnn") & (R.resolution == "monthly")][met if met != "rate_abserr" else "rate_abserr_median"].mean()
+        vb = R[(R.model == "no") & (R.resolution == "monthly")][met if met != "rate_abserr" else "rate_abserr_median"].mean()
+        T.append(dict(metric=met, glance=va, no=vb, diff=va - vb, lo=np.nanpercentile(d, 2.5), hi=np.nanpercentile(d, 97.5), p=paired_p(d)))
+    T = pd.DataFrame(T); T["p_holm"] = holm(T.p.values); T.to_csv(OFFGRID_OUT / "monthly_tests.csv", index=False)
+    print(R.groupby(["model", "resolution"]).mean(numeric_only=True).round(3).to_string()); print(T.round(4).to_string())
+    print("6-month points of the monthly query vs saved 6-month forecasts (max |diff|):", Cc.groupby("model").max_abs_6m_points.max().to_dict())
+
+
+PM_MODELS = ["fg", "rnn", "lstm", "no", "lnn"]
+PM_HB = (("0-2 y", 0, 2), ("2-5 y", 2, 5), ("5-10 y", 5, 10))
+PM_NEVER = 10.5
+
+
+def _pm_theil_sen(t, y):
+    i, j = np.triu_indices(len(t), 1)
+    return float(np.median((y[j] - y[i]) / (t[j] - t[i])))
+
+
+def _pm_per_patient(F, PAT, P):
+    R = []
+    for p in P:
+        d = PAT[p]; f = F[p]; t, y, yh = d["t"], d["y"], f["vp"]
+        assert np.allclose(f["vt"], t)
+        r = dict(E=d["E2"], T=d["E2_T"], b=_pm_theil_sen(t, y), bh=_pm_theil_sen(t, yh))
+        k = t > 0; y0 = y[0]; ch = k & (y != y0)
+        r["sabs_ch"], r["n_ch"] = np.abs(yh[ch] - y[ch]).sum(), ch.sum()
+        obs, pred = (y >= y0 + 1), (yh >= y0 + 0.5)
+        for name, sel in [("all", k)] + [(b, k & (t > lo) & (t <= hi)) for b, lo, hi in PM_HB]:
+            r[f"tp_{name}"] = int((sel & obs & pred).sum()); r[f"fn_{name}"] = int((sel & obs & ~pred).sum())
+            r[f"tn_{name}"] = int((sel & ~obs & ~pred).sum()); r[f"fp_{name}"] = int((sel & ~obs & pred).sum())
+        g = at(f, G); h = np.where(g >= FIX_C)[0]; r["That"] = G[h[0]] if len(h) else PM_NEVER
+        R.append(r)
+    return pd.DataFrame(R)
+
+
+def _pm_metrics(D, W):
+    E = D.E.values.astype(bool); err = D.bh.values - D.b.values; out = {}
+    with np.errstate(all="ignore"):
+        for g, sel in (("all", np.ones(len(D), bool)), ("prog", E), ("stable", ~E)):
+            out[f"m1_abs_{g}"] = (W[:, sel] @ np.abs(err[sel])) / W[:, sel].sum(1)
+            out[f"m1_bias_{g}"] = (W[:, sel] @ err[sel]) / W[:, sel].sum(1)
+        out["m2a"] = (W @ D.sabs_ch.values) / (W @ D.n_ch.values)
+        for h in ["all"] + [b for b, _, _ in PM_HB]:
+            tp, fn, tn, fp = (W @ D[f"{c}_{h}"].values for c in ("tp", "fn", "tn", "fp"))
+            sens, spec = tp / (tp + fn), tn / (tn + fp)
+            out[f"m2b_sens_{h}"], out[f"m2b_spec_{h}"], out[f"m2b_ba_{h}"] = sens, spec, (sens + spec) / 2
+    out["m3_c"] = cindex_w(D["T"].values, E, -D.That.values, W)
+    return out
+
+
+def _pm_forecasts(m, part, PAT, P):
+    if m == "fg":
+        f = {p: dict(vt=PAT[p]["t"], vp=np.full(len(PAT[p]["t"]), PAT[p]["g0"]), gt=G, gp=np.full(len(G), PAT[p]["g0"])) for p in P}
+        return {0: f}
+    if part == "cv":
+        F, _ = cv_forecasts(f"{m}_grade_V4", PAT); return {s: {p: F[s][p] for p in P} for s in SEEDS}
+    return {s: forecasts_from_csv(RESULTS_FINAL / "runs" / run_name(m, 1, "V4", 0, s) / "predictions_test.csv", PAT, set(P)) for s in SEEDS}
+
+
+def _pm_run(part, PAT, P):
+    W = boot_weights(len(P)); ONE = np.ones((1, len(P))); rows, B = [], {}
+    for m in PM_MODELS:
+        Fs = _pm_forecasts(m, part, PAT, P); bs = []
+        for s, F in Fs.items():
+            D = _pm_per_patient(F, PAT, P); pt = _pm_metrics(D, ONE); bs.append(_pm_metrics(D, W))
+            rows.append(dict(part=part, model=m, seed=s, n_patients=len(P), n_prog=int(D.E.sum()), n_changed_visits=int(D.n_ch.sum()),
+                             n_increase_visits=int(D.tp_all.sum() + D.fn_all.sum()), **{k: v[0] for k, v in pt.items()}))
+        B[m] = {k: np.nanmean([b[k] for b in bs], 0) for k in bs[0]}
+    R = pd.DataFrame(rows); R.to_csv(RESULTS_POSTHOC / f"progression_per_seed_{part}.csv", index=False)
+    T = []
+    for met in ("m1_abs_prog", "m2a", "m2b_ba_all", "m3_c"):
+        for o in ("rnn", "lstm", "no"):
+            d = B["lnn"][met] - B[o][met]
+            va, vb = R[R.model == "lnn"][met].mean(), R[R.model == o][met].mean()
+            T.append(dict(part=part, metric=met, other=o, glance=va, other_value=vb, diff=va - vb, lo=np.nanpercentile(d, 2.5), hi=np.nanpercentile(d, 97.5), p=paired_p(d)))
+    T = pd.DataFrame(T); T["p_holm"] = holm(T.p.values); T.to_csv(RESULTS_POSTHOC / f"progression_tests_{part}.csv", index=False)
+    print(f"progression_metrics {part}: {len(R)} rows, {len(T)} tests")
+
+
+def progression_metrics():
+    PAT = patients()
+    Pcv = sorted(p for p in rounds()[0][0] if not PAT[p]["late0"]); Pte = sorted(p for p in test_pids() if not PAT[p]["late0"])
+    for part, P in (("cv", Pcv), ("test", Pte)):
+        _pm_run(part, PAT, P)
+    print("progression_metrics done")
+
+
 def main():
     cmd = sys.argv[1]
     {"onset": onset, "onset_class": onset_class, "late_per_seed": late_per_seed, "onset_by_grade": onset_by_grade,
      "figs": figs, "bygrade": bygrade, "ablation_extra": ablation_extra, "explain59": explain59,
-     "irregular": irregular, "irregular_3seeds": irregular_3seeds, "querystep": querystep}[cmd]()
+     "irregular": irregular, "irregular_3seeds": irregular_3seeds, "querystep": querystep,
+     "offgrid_step0": offgrid_step0, "offgrid_unseen_visits": offgrid_unseen_visits,
+     "offgrid_annual_grid": offgrid_annual_grid, "offgrid_monthly": offgrid_monthly,
+     "progression_metrics": progression_metrics}[cmd]()
 
 
 if __name__ == "__main__":
