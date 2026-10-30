@@ -1,11 +1,13 @@
 """ Evaluation (cross-validation out-of-fold and test set, the same code).
   cv         : pooled cross-validation out-of-fold metrics + paired tests (construction set, never touches test set) -> results/evaluation/cv/{metrics_cv.csv, metrics_cv_by_fold.csv, metrics_cv_folds.csv, tests_cv.csv, cv_info.json}
   test       : checks every finaltraining run and baseline model exists, predicts test set once, metrics + paired tests -> runs/<run>/predictions_test.csv, results/evaluation/test/{metrics_test.csv, tests_test.csv, test_info.json, TEST_OPENED.txt, baseline_predictions_test.pkl}
+  test_extra : extra test for the posthoc final models -> extra_runs/<run>/predictions_test.csv,results/evaluation/test_extra/{TEST_OPENED.txt, test_extra_info.json}
   properties : parameters, seconds per epoch, test set seed SD (existing files only) -> results/evaluation/properties/model_properties.csv
 
 Can be run on its own or through scripts/driver.sh:
   python -m scripts.evaluation cv
   python -m scripts.evaluation test
+  python -m scripts.evaluation test_extra
   python -m scripts.evaluation properties
 """
 import json
@@ -17,11 +19,16 @@ from glance.config import RESULTS_LOSSSEL, RESULTS_FINAL, RESULTS_EVAL
 from glance.data import MinMaxNorm, rounds, load_samples, load_X, test_pids, V2Dataset, SEEDS, FOLDS
 from glance.evaluate import Scorer, cv_baselines, cv_forecasts, cv_seeds, first_scorer, forecasts_from_csv, label, metrics, patients, run_tests, seed_mean, split_key, summarise, valid_times, _cv_run_dir, at
 from glance.models import build, predict, run_name
-from scripts.finaltraining import predict_all
+from glance.irregular import SETTINGS as IRREG_SETTINGS, thin as irreg_thin, build as irreg_build, predict as irreg_predict
+from glance.annual import annualise, AnnualRNN, predict as annual_predict
+from glance.continuous import build as continuous_build, rdir as continuous_rdir
+from scripts.finaltraining import predict_all, extra_rdir
 
 CV_OUT = RESULTS_EVAL / "cv"
 TEST_OUT = RESULTS_EVAL / "test"
+EXTRA_TEST_OUT = RESULTS_EVAL / "test_extra"
 PROP_OUT = RESULTS_EVAL / "properties"
+EXTRA_TEST_JOBS = [("nogrid", m) for m in ("rnn", "lstm", "no", "lnn", "tlstm")] + [("annual", m) for m in ("rnn", "lstm")] + [("rs", "lnn")]
 
 
 def cohort(PAT):
@@ -117,6 +124,39 @@ def test():
     print(Tt.to_string())
 
 
+def _extra_dir(kind, model, seed):
+    return extra_rdir(kind, model, seed) if kind != "rs" else continuous_rdir("rs", 0, seed)
+
+
+def test_extra():
+    assert not info.exists(), "TEST already predicted once for the extra final models"
+    for kind, m in EXTRA_TEST_JOBS:
+        for s in SEEDS:
+            assert (_extra_dir(kind, m, s) / "done.json").exists(), f"final run missing: {kind} {m} seed {s}"
+    stamp = datetime.now().isoformat(timespec="seconds")
+    with open(info, "a") as f:
+        f.write(f"{stamp} opened for the extra final models (scripts.evaluation.test_extra)\n")
+    S = load_samples(); X = load_X(); T = test_pids(); Ft = S[S.pid.isin(T) & S["first"]].reset_index(drop=True)
+    dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    done = []
+    for kind, m in EXTRA_TEST_JOBS:
+        for s in SEEDS:
+            d = _extra_dir(kind, m, s); z = np.load(d / "scaler.npz"); sc = MinMaxNorm(np.zeros(1), np.ones(1)); sc.min, sc.scale = z["data_min"], z["scale"]
+            sd = torch.load(d / "best.pt", map_location=dev)["model_state_dict"]
+            if kind == "nogrid":
+                mod = irreg_build(m, 1025).to(dev); mod.load_state_dict(sd); mod.eval()
+                ds = V2Dataset(irreg_thin(Ft, IRREG_SETTINGS["S0"], seed=s), X, sc, 1)
+                irreg_predict(mod, ds, dev).to_csv(d / "predictions_test.csv", index=False)
+            elif kind == "annual":
+                mod = AnnualRNN({"rnn": "RNN", "lstm": "LSTM"}[m], 1025).to(dev); mod.load_state_dict(sd); mod.eval()
+                annual_predict(mod, V2Dataset(annualise(Ft), X, sc, 1), Ft, dev).to_csv(d / "predictions_test.csv", index=False)
+            else:
+                mod = continuous_build("rs", 1025).to(dev); mod.load_state_dict(sd); mod.eval()
+                P = predict(mod, V2Dataset(Ft, X, sc, 1), dev); assert set(P.pid) == set(T); P.to_csv(d / "predictions_test.csv", index=False)
+            done.append(str(d.relative_to(RESULTS_FINAL.parent))); print("predicted", d.name, flush=True)
+    json.dump(dict(opened=stamp, n_test_patients=len(T), runs=done), open(EXTRA_TEST_OUT / "test_extra_info.json", "w"), indent=1)
+
+
 def properties():
     PROP_OUT.mkdir(parents=True, exist_ok=True)
     E = json.load(open(RESULTS_FINAL / "final_epochs.json"))
@@ -145,7 +185,7 @@ def properties():
 
 def main():
     cmd = sys.argv[1]
-    {"cv": cv, "test": test, "properties": properties}[cmd]()
+    {"cv": cv, "test": test, "test_extra": test_extra, "properties": properties}[cmd]()
 
 
 if __name__ == "__main__":

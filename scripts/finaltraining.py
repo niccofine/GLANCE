@@ -2,6 +2,7 @@
 - epochs: final epochs per model/variant = median best epoch from the cross-validation runs (crossvalidation/ and, for the chosen V*, lossselection/) -> results/finaltraining/final_epochs.json
 - train (worker): retrain on all of construction set (3 seeds; fixed epochs): LNN V0, V1, V* (+ grade), LNN image only V1; RNN, LSTM, NO V0, V1, V* -> 39 runs
 - baselines (cv / final): first grade alone; Cox (first grade + RET-CLIP PCA, k chosen by inner cross-validation on construction, max 20); linear SVM for +2y / +5y (calibrated by cross-validation); logistic regression for late by 2y / 5y (first grade + 10 PCA). 'cv' fits per cross-validation round on the round's training patients (used by evaluation.py for the CV metrics); 'final' fits on all CONSTR (used for the TEST predictions). Never reads test set.
+- extra posthoc final models for the no-grid-S0 and annual-grid experiments, all on construction set, fixed epochs -> results/finaltraining/extra_runs/{NG,G12}_<model>_f0_s<seed>/
 
 Can be run on its own or through scripts/driver.sh:
   python -m scripts.finaltraining epochs
@@ -10,13 +11,20 @@ Can be run on its own or through scripts/driver.sh:
   python -m scripts.finaltraining check
   python -m scripts.finaltraining baselines cv
   python -m scripts.finaltraining baselines final
+  python -m scripts.finaltraining worker_extra --gpu 0
 """
 import argparse
 import json
 import pickle
+import socket
+import subprocess
 import sys
 import time
 import warnings
+from datetime import datetime
+from pathlib import Path
+import torch
+from torch.utils.data import DataLoader
 import numpy as np, pandas as pd
 from lifelines import CoxPHFitter
 from lifelines.utils import concordance_index
@@ -27,9 +35,11 @@ from sklearn.model_selection import GroupKFold, StratifiedKFold
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
 from glance.config import LATE_THRESHOLD, RESULTS_LOSSSEL, RESULTS_FINAL
-from glance.data import MinMaxNorm, rounds, load_samples, load_X
+from glance.data import MinMaxNorm, rounds, load_samples, load_X, load_cohort, round_data, horizon_weights, V2Dataset, collate_w
 from glance.evaluate import patients, case_ctrl, cv_seeds, G, HS, EVS, _cv_run_dir
-from glance.models import jobs, rdir, run_name, worker
+from glance.models import jobs, rdir, run_name, worker, set_seed, CFG
+from glance.irregular import SETTINGS as IRREG_SETTINGS, thin as irreg_thin, build as irreg_build, epoch as irreg_epoch
+from glance.annual import annualise, AnnualRNN, epoch as annual_epoch
 STAGE = "finaltraining"
 
 
@@ -170,11 +180,88 @@ def baselines(mode):
         print(f"{mode} {k}: cox k = {M['cox_k']} | svm {M['svm_info']} | lr {M['lr_info']} | {time.time() - t0:.0f}s", flush=True)
 
 
+EXTRA_OUT = RESULTS_FINAL / "extra_runs"
+EXTRA_JOBS = [("nogrid", m, e) for m, e in (("lnn", 25), ("no", 26), ("rnn", 29), ("lstm", 24), ("tlstm", 28))] + \
+             [("annual", m, e) for m, e in (("rnn", 27), ("lstm", 24))]
+
+
+def extra_rdir(kind, model, seed):
+    return EXTRA_OUT / f"{'NG' if kind == 'nogrid' else 'G12'}_{model}_f0_s{seed}"
+
+
+def train_extra(kind, model, seed, epochs, out=None):
+    rd = Path(out) if out else extra_rdir(kind, model, seed); rd.mkdir(parents=True, exist_ok=True)
+    if (rd / "done.json").exists():
+        print("done already:", rd); return
+    set_seed(seed); dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    C = load_cohort(); S = load_samples(); D = round_data(0, C, S)
+    assert not D["inner_pids"] and not D["heldout_pids"] and len(D["train_pids"]) == 302
+    if kind == "nogrid":
+        assert model in ("rnn", "lstm", "no", "lnn", "tlstm")
+        tr, allt = (irreg_thin(D[k], IRREG_SETTINGS["S0"], seed=seed) for k in ("train", "all_train")); ep_fn = irreg_epoch
+        mod = irreg_build(model, 1025)
+    else:
+        assert model in ("rnn", "lstm")
+        tr, allt = (annualise(D[k]) for k in ("train", "all_train")); ep_fn = annual_epoch
+        mod = AnnualRNN({"rnn": "RNN", "lstm": "LSTM"}[model], 1025)
+    bw, share = horizon_weights(allt)
+    dtr = V2Dataset(tr, D["X"], D["scaler"], 1, bw)
+    g = torch.Generator(); g.manual_seed(seed)
+    ltr = DataLoader(dtr, batch_size=1, shuffle=True, collate_fn=collate_w(dtr), generator=g)
+    mod = mod.to(dev)
+    opt = torch.optim.AdamW(mod.parameters(), lr=CFG["lr"], weight_decay=CFG["weight_decay"])
+    gpu = torch.cuda.get_device_name(0) if dev.type == "cuda" else "cpu"
+    cfg = dict(kind=kind, model=model, setting="S0" if kind == "nogrid" else "annual", fold=0, seed=seed, variant="V4", **CFG,
+               fixed_epochs=epochs, bin_weights=bw.tolist(), n_train=len(dtr), n_train_patients=len(D["train_pids"]),
+               n_params=sum(q.numel() for q in mod.parameters()), gpu=gpu, cuda_visible_devices=os.environ.get("CUDA_VISIBLE_DEVICES"),
+               host=socket.gethostname(), started=datetime.now().isoformat(timespec="seconds"))
+    json.dump(cfg, open(rd / "config.json", "w"), indent=1)
+    np.savez(rd / "scaler.npz", data_min=D["scaler"].min, scale=D["scaler"].scale)
+    log = open(rd / "train.log", "w"); hist, t0 = [], time.time()
+    for ep in range(epochs):
+        te = time.time(); L = ep_fn(mod, ltr, dev, opt)
+        if not np.isfinite(L):
+            log.write(f"non-finite training loss at epoch {ep}\n"); raise SystemExit(2)
+        hist.append(dict(epoch=ep, train=L, sec=time.time() - te))
+        log.write(f"epoch {ep} train {L:.4f} {hist[-1]['sec']:.1f}s\n"); log.flush()
+    torch.save({"model_state_dict": mod.state_dict(), "epoch": epochs - 1, "config": cfg}, rd / "best.pt")
+    pd.DataFrame(hist).to_csv(rd / "log.csv", index=False)
+    json.dump(dict(best_epoch=epochs - 1, n_epochs_best=epochs, epochs_run=len(hist), train_seconds=time.time() - t0,
+                   sec_per_epoch=float(np.mean([h["sec"] for h in hist])), gpu=gpu, finished=datetime.now().isoformat(timespec="seconds")),
+              open(rd / "done.json", "w"), indent=1)
+    print(f"done {rd.name}: {epochs} epochs, {(time.time() - t0) / 60:.1f} min", flush=True)
+
+
+def worker_extra(gpu):
+    env = dict(os.environ, CUDA_DEVICE_ORDER="PCI_BUS_ID", CUDA_VISIBLE_DEVICES=str(gpu), PYTHONDONTWRITEBYTECODE="1")
+    for attempt in (1, 2):
+        for kind, model, e in EXTRA_JOBS:
+            for seed in (0, 1, 2):
+                rd = extra_rdir(kind, model, seed); rd.mkdir(parents=True, exist_ok=True); lk = rd / "claim.lock"
+                if (rd / "done.json").exists():
+                    continue
+                try:
+                    fd = os.open(lk, os.O_CREAT | os.O_EXCL | os.O_WRONLY); os.write(fd, str(os.getpid()).encode()); os.close(fd)
+                except FileExistsError:
+                    try:
+                        os.kill(int(lk.read_text()), 0); continue
+                    except Exception:
+                        lk.unlink(missing_ok=True); continue
+                with open(rd / "stdout.log", "a") as o:
+                    subprocess.call([sys.executable, "-m", "scripts.finaltraining", "train_extra", "--kind", kind, "--model", model,
+                                     "--seed", str(seed), "--epochs", str(e)], env=env, stdout=o, stderr=subprocess.STDOUT, cwd=str(ROOT))
+                lk.unlink(missing_ok=True)
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=("epochs", "worker", "check", "list", "baselines"))
+    ap.add_argument("cmd", choices=("epochs", "worker", "check", "list", "baselines", "train_extra", "worker_extra"))
     ap.add_argument("mode", nargs="?", choices=("cv", "final"))
     ap.add_argument("--gpu", type=int)
+    ap.add_argument("--kind", choices=("nogrid", "annual"))
+    ap.add_argument("--model")
+    ap.add_argument("--seed", type=int)
+    ap.add_argument("--epochs", type=int)
     a = ap.parse_args()
     if a.cmd == "epochs":
         epochs()
@@ -188,6 +275,10 @@ def main():
     elif a.cmd == "baselines":
         assert a.mode, "baselines needs a mode: cv or final"
         baselines(a.mode)
+    elif a.cmd == "train_extra":
+        train_extra(a.kind, a.model, a.seed, a.epochs)
+    elif a.cmd == "worker_extra":
+        worker_extra(a.gpu)
 
 
 if __name__ == "__main__":

@@ -1,21 +1,25 @@
 """Post-pipeline analyses (no training; saved forecasts and saved explainability outputs only). Cross-validation out-of-fold = primary; test set = descriptive only.
-  onset                : onset timing  -> results/posthoc/onset_{summary,tests,per_patient}.csv
-  onset_class          : 4-way onset classification (on time / early / late / missed), by first-grade stratum -> results/posthoc/onset_class.csv
-  late_per_seed        : "% late" onset error per seed (not pooled), cross-validation fixed grid / no grid (S0) / test -> results/posthoc/late_per_seed.csv
-  onset_by_grade       : the same onset-timing errors broken out by starting grade -> results/posthoc/onset_by_grade.csv
-  figs                 : converters aligned at onset, non-converters by first grade -> results/posthoc/table_{converters_aligned,nonconverters}.csv
-  bygrade              : discrimination within first-grade strata -> results/posthoc/bygrade_{metrics,tests}.csv
-  ablation_extra       : no-grid AUC 5y for the irregular-visit experiment + loss-ablation V0-V4 rising/late stats -> results/posthoc/{irregular/auc5_nogrid.csv,ablation_extra.csv}
-  explain59            : explainability -> results/posthoc/{A_shares_eval59.json, B2_concepts_eval59.csv, C_macula_eval59.csv, C_maps_eval59.npz, explain_summary_eval59.json}
-  irregular            : evaluation of the irregular-visit training experiment, seed 0, 5 backbones -> results/posthoc/irregular/{irreg_metrics.csv, irreg_tests.csv, fig_irregular.{pdf,png}}
-  irregular_3seeds     : the same experiment over 3 seeds (LNN/RNN/LSTM/NO), + AUC 5y and C -> results/posthoc/{irreg3_metrics.csv, irreg3_tests.csv}
-  querystep            : re-runs saved crossvalidation checkpoints at 3 query-grid resolutions (no training) -> results/posthoc/querystep/{querystep_metrics.csv, querystep_tests.csv, check_reproduce_saved.json, querystep_info.json, fig_querystep_example.{pdf,png}}
-  offgrid_step0        : visit-time grid checks -> results/posthoc/offgrid/step0.json
-  offgrid_unseen_visits: forecasts at unseen (dropped) visit dates, no-grid -50% irregular-visit models (glance.irregular), 3 seeds -> results/posthoc/offgrid/{unseen_per_seed.csv, unseen_points.csv.gz, unseen_tests.csv}
-  offgrid_annual_grid  : annual-grid RNN / LSTM vs the existing 6-month V4 cross-validation runs -> results/posthoc/offgrid/annual_per_seed.csv
-  offgrid_monthly      : fixed-grid V4 GLANCE / NO CV checkpoints queried monthly (0-10 y, step 1/12 y) vs their saved 6-month forecasts -> results/posthoc/offgrid/{monthly_per_seed.csv, monthly_tests.csv, monthly_check_6m_points.csv}
-  progression_metrics  : progression metrics, saved forecasts only -> results/posthoc/progression_{per_seed,tests}_{cv,test}.csv
+  onset                   : onset timing  -> results/posthoc/onset_{summary,tests,per_patient}.csv
+  onset_class             : 4-way onset classification (on time / early / late / missed), by first-grade stratum -> results/posthoc/onset_class.csv
+  late_per_seed           : "% late" onset error per seed (not pooled), cross-validation fixed grid / no grid (S0) / test -> results/posthoc/late_per_seed.csv
+  onset_by_grade          : the same onset-timing errors broken out by starting grade -> results/posthoc/onset_by_grade.csv
+  figs                    : converters aligned at onset, non-converters by first grade -> results/posthoc/table_{converters_aligned,nonconverters}.csv
+  bygrade                 : discrimination within first-grade strata -> results/posthoc/bygrade_{metrics,tests}.csv
+  ablation_extra          : no-grid AUC 5y for the irregular-visit experiment + loss-ablation V0-V4 rising/late stats -> results/posthoc/{irregular/auc5_nogrid.csv,ablation_extra.csv}
+  explain59               : explainability -> results/posthoc/{A_shares_eval59.json, B2_concepts_eval59.csv, C_macula_eval59.csv, C_maps_eval59.npz, explain_summary_eval59.json}
+  irregular               : evaluation of the irregular-visit training experiment, seed 0, 5 backbones -> results/posthoc/irregular/{irreg_metrics.csv, irreg_tests.csv, fig_irregular.{pdf,png}}
+  irregular_3seeds        : the same experiment over 3 seeds (LNN/RNN/LSTM/NO), + AUC 5y and C -> results/posthoc/{irreg3_metrics.csv, irreg3_tests.csv}
+  querystep               : re-runs saved crossvalidation checkpoints at 3 query-grid resolutions (no training) -> results/posthoc/querystep/{querystep_metrics.csv, querystep_tests.csv, check_reproduce_saved.json, querystep_info.json, fig_querystep_example.{pdf,png}}
+  offgrid_step0           : visit-time grid checks -> results/posthoc/offgrid/step0.json
+  offgrid_unseen_visits   : forecasts at unseen (dropped) visit dates, no-grid -50% irregular-visit models (glance.irregular), 3 seeds -> results/posthoc/offgrid/{unseen_per_seed.csv, unseen_points.csv.gz, unseen_tests.csv}
+  offgrid_annual_grid     : annual-grid RNN / LSTM vs the existing 6-month V4 cross-validation runs -> results/posthoc/offgrid/annual_per_seed.csv
+  offgrid_monthly         : fixed-grid V4 GLANCE / NO CV checkpoints queried monthly (0-10 y, step 1/12 y) vs their saved 6-month forecasts -> results/posthoc/offgrid/{monthly_per_seed.csv, monthly_tests.csv, monthly_check_6m_points.csv}
+  progression_metrics     : progression metrics, saved forecasts only -> results/posthoc/progression_{per_seed,tests}_{cv,test}.csv
+  continuous_consistency  : step-consistency of the continuous-time variants  -> results/posthoc/continuous/{consistency.csv, consistency_verdict.json}
+  continuous_unseen_visits: forecasts at UNSEEN / dropped visit dates for the continuous-time variants -> results/posthoc/continuous/{unseen_points.csv.gz, unseen_per_seed.csv}
+  continuous_criteria     : performance criterion of each continuous-time variant -> results/posthoc/continuous/{performance_criterion_<variant>.csv, tests_criteria.csv}
 
+Needs allresults.py to have been run first for continuous_criteria.
 Can be run on its own or through scripts/driver.sh:
     python -m scripts.posthoc onset
     python -m scripts.posthoc onset_class
@@ -33,6 +37,9 @@ Can be run on its own or through scripts/driver.sh:
     python -m scripts.posthoc offgrid_annual_grid
     python -m scripts.posthoc offgrid_monthly
     python -m scripts.posthoc progression_metrics
+    python -m scripts.posthoc continuous_consistency
+    python -m scripts.posthoc continuous_unseen_visits
+    python -m scripts.posthoc continuous_criteria
 """
 import json
 import pickle
@@ -49,6 +56,8 @@ from glance.evaluate import Scorer, boot_weights, case_ctrl, cindex_w, cv_foreca
 from glance.models import run_name, build
 from glance.irregular import OUT as IRREG_OUT, MODELS as IRREG_MODELS, SETTINGS as IRREG_SETTINGS, build as irreg_build, thin as irreg_thin, rdir as irreg_rdir
 from glance.annual import rdir as annual_rdir
+from glance.continuous import build as continuous_build, rdir as continuous_rdir, pure_grid as continuous_pure_grid
+from scripts.allresults import OUT as ALLRESULTS_OUT, CNAME as CONT_CNAME, agg as ar_agg
 from scripts.explainability import CONCEPTS, SHORT, bh, boot_mean_ci, ig_all, part_C, setup as explain_setup
 from scripts.evaluation import TEST_OUT
 from scripts.figures import PAPER_RCPARAMS, ORANGE
@@ -1047,6 +1056,179 @@ def progression_metrics():
     print("progression_metrics done")
 
 
+CONT_OUT = RESULTS_POSTHOC / "continuous"
+CONT_SCHED = {"1/12": 1 / 12, "1/4": 0.25, "1/2": 0.5, "1": 1.0}
+CONT_SNAMES = list(CONT_SCHED) + ["visits"]
+CONT_LAB = {"rs": "GLANCE-RS-V4", "con": "GLANCE-CON-V4", "ltc": "GLANCE-LTC-V4", "lnn": "GLANCE-V4", "no": "NO-V4"}
+CONT_MEAN_MAX = (0.05, 0.30)
+
+
+def _cont_ckpt(key, fold, seed):
+    return RESULTS_CV / "runs" / run_name(key, 1, "V4", fold, seed) if key in ("lnn", "no") else continuous_rdir(key, fold, seed)
+
+
+def _cont_load(key, d, dev):
+    mod = (build(key, 1025) if key in ("lnn", "no") else continuous_build(key, 1025)).to(dev)
+    mod.load_state_dict(torch.load(d / "best.pt", map_location=dev)["model_state_dict"]); mod.eval()
+    return mod
+
+
+def _cont_schedules(mod, ds):
+    n = len(ds); out = {p: {} for p in ds.s.pid}
+    for nm, st in CONT_SCHED.items():
+        grid = continuous_pure_grid(st); P = _og_batched(mod, ds.x, [grid] * n)
+        for p, v in zip(ds.s.pid, P):
+            out[p][nm] = (grid, v)
+    vt = [np.asarray(t, np.float32) for t in ds.s.t]; P = _og_batched(mod, ds.x, vt)
+    for p, t, v in zip(ds.s.pid, vt, P):
+        out[p]["visits"] = (np.round(t.astype(float), 6), v)
+    return out
+
+
+def _cont_pair_diffs(F, pids, a, b):
+    dd = []
+    for p in pids:
+        ta, va = F[p][a]; tb, vb = F[p][b]
+        ka = np.round(ta, 6) <= 10 + 1e-9; kb = np.round(tb, 6) <= 10 + 1e-9
+        sa = {round(float(t), 5): float(v) for t, v in zip(ta[ka], va[ka])}; sb = {round(float(t), 5): float(v) for t, v in zip(tb[kb], vb[kb])}
+        sh = sorted(set(sa) & set(sb)); dd.append(np.abs(np.array([sa[t] for t in sh]) - np.array([sb[t] for t in sh])))
+    dd = np.concatenate(dd)
+    return float(dd.mean()), float(dd.max()), len(dd), int((dd > 0.30).sum())
+
+
+def continuous_consistency():
+    CONT_OUT.mkdir(parents=True, exist_ok=True)
+    dev = torch.device("cpu"); PAT, P = _og_cohort(); S = load_samples(); X = load_X(); rows = []
+    for key in ("rs", "con", "ltc", "lnn", "no"):
+        for seed in SEEDS:
+            F = {}
+            for k in FOLDS:
+                d = _cont_ckpt(key, k, seed)
+                if not (d / "done.json").exists():
+                    continue
+                mod = _cont_load(key, d, dev)
+                Fk = S[S.pid.isin(set(rounds()[k][1]) & set(P)) & S["first"]].reset_index(drop=True)
+                z = np.load(d / "scaler.npz"); sc = MinMaxNorm(np.zeros(1), np.ones(1)); sc.min, sc.scale = z["data_min"], z["scale"]
+                F.update(_cont_schedules(mod, V2Dataset(Fk, X, sc, 1)))
+            if not F:
+                continue
+            pids = [p for p in P if p in F]
+            for i, a in enumerate(CONT_SNAMES):
+                for b in CONT_SNAMES[i + 1:]:
+                    mu, mx, n, n30 = _cont_pair_diffs(F, pids, a, b)
+                    rows.append(dict(id=CONT_LAB[key], seed=seed, a=a, b=b, mean_absdiff=mu, max_absdiff=mx, n_points=n, n_gt030=n30))
+    C = pd.DataFrame(rows); C.to_csv(CONT_OUT / "consistency.csv", index=False)
+    verdict = {}
+    for key in ("rs", "con", "ltc"):
+        g = C[C.id == CONT_LAB[key]]
+        if not len(g):
+            verdict[CONT_LAB[key]] = "not trained"; continue
+        res = {}
+        for o in ("1/12", "1/4", "1", "visits"):
+            r = g[((g.a == o) & (g.b == "1/2")) | ((g.a == "1/2") & (g.b == o))]
+            res[o] = dict(mean=float(r.groupby("seed").mean_absdiff.first().mean()), max=float(r.max_absdiff.max()))
+        verdict[CONT_LAB[key]] = all(v["mean"] <= CONT_MEAN_MAX[0] and v["max"] <= CONT_MEAN_MAX[1] for v in res.values())
+    json.dump(verdict, open(CONT_OUT / "consistency_verdict.json", "w"), indent=1)
+    print("continuous_consistency:", json.dumps(verdict, indent=1))
+    print(C.groupby("id")[["mean_absdiff", "max_absdiff"]].mean().round(3).to_string())
+
+
+def continuous_unseen_visits():
+    CONT_OUT.mkdir(parents=True, exist_ok=True)
+    dev = torch.device("cpu"); t0 = time.time(); PAT, P = _og_cohort(); Ps = set(P); pts = []
+    for v in ("rs", "con", "ltc"):
+        if not all((continuous_rdir(v, k, s) / "done.json").exists() for k in FOLDS for s in SEEDS):
+            print(f"continuous_unseen_visits: {v} not fully trained yet, skipped"); continue
+        for sd in SEEDS:
+            for k in FOLDS:
+                D = round_data(k); full = D["heldout_first"]; full = full[full.pid.isin(Ps)].reset_index(drop=True); kept = irreg_thin(full, 0.5, seed=sd)
+                sv = pd.read_csv(continuous_rdir(v, k, sd) / "predictions_heldout.csv"); sv = sv[sv.is_visit]
+                sv = {p: q.sort_values("t") for p, q in sv.groupby("pid")}
+                ds = V2Dataset(kept, D["X"], D["scaler"], 1)
+                mod = continuous_build(v, 1025); mod.load_state_dict(torch.load(continuous_rdir(v, k, sd) / "best.pt", map_location=dev)["model_state_dict"]); mod.eval()
+                xs, qs, meta = [], [], []
+                for i, r in kept.iterrows():
+                    ft, fy = full.loc[i, "t"], full.loc[i, "y"]; kt = r.t
+                    q = sv[r.pid]; assert np.allclose(q.t.values, kt), (v, sd, r.pid)
+                    kp = q.y_pred.values
+                    for tt, pp, yy in zip(kt, kp, r.y):
+                        pts.append(dict(model=v, seed=sd, pid=r.pid, t=float(tt), y_true=float(yy), kind="kept", direct=pp))
+                    drop = [(tt, yy) for tt, yy in zip(ft, fy) if not np.any(np.isclose(kt, tt))]
+                    for tt, yy in drop:
+                        pts.append(dict(model=v, seed=sd, pid=r.pid, t=float(tt), y_true=float(yy), kind="dropped", direct=np.nan))
+                        xs.append(ds.x[i]); qs.append(np.sort(np.r_[kt, tt]).astype(np.float32)); meta.append((len(pts) - 1, tt))
+                if qs:
+                    outs = _og_batched(mod, torch.stack(xs), qs)
+                    for (j, tt), o, q in zip(meta, outs, qs):
+                        pts[j]["direct"] = float(o[int(np.argmin(np.abs(q - tt)))])
+            print(f"continuous_unseen_visits {v} seed {sd} done ({time.time() - t0:.0f}s)", flush=True)
+    if not pts:
+        print("continuous_unseen_visits: nothing trained yet"); return
+    X = pd.DataFrame(pts); X.to_csv(CONT_OUT / "unseen_points.csv.gz", index=False)
+    W = boot_weights(len(P)); ONE = np.ones((1, len(P))); idx = {p: i for i, p in enumerate(P)}
+    rows = []
+    for (m, sd), g in X.groupby(["model", "seed"]):
+        dr = g[g.kind == "dropped"]; e = np.abs(dr.direct.values - dr.y_true.values); pi = dr.pid.map(idx).values
+        sa = np.bincount(pi, e, len(P)); na = np.bincount(pi, None, len(P)).astype(float)
+        with np.errstate(all="ignore"):
+            mae_drop_pt = ((ONE @ sa) / (ONE @ na))[0]
+        al = {}
+        for p, q in g.groupby("pid"):
+            q = q.sort_values("t"); yp = q.direct.values; h = np.where(yp >= FIX_C)[0]; al[p] = q.t.values[h[0]] if len(h) else np.inf
+        Dd = _og_onset_rows(al, PAT, P); ob = _og_onset_metrics(Dd, ONE)
+        rows.append(dict(model=m, seed=sd, mae_drop=float(mae_drop_pt), n_dropped=int(len(dr)), **{k: float(v2[0]) for k, v2 in ob.items()}))
+    R = pd.DataFrame(rows); R.to_csv(CONT_OUT / "unseen_per_seed.csv", index=False)
+    print(R.groupby("model")[["mae_drop", "det", "ontime", "late"]].mean().round(3).to_string())
+
+
+CRIT_PERF = [("auc5", "AUC5y", +1), ("c", "C", +1), ("mae", "MAE", -1), ("det", "%det", +1), ("ontime", "%on time", +1),
+             ("late", "%late", -1), ("m3", "M3", +1)]
+CRIT_COMP = ("G6-GLANCE-V4", "G6-NO-V4")
+
+
+def _crit_boot(PP, PAT, P, pairs, mets, W):
+    rows = []
+    for a, b in pairs:
+        for met in mets:
+            def ms(mid, WW):
+                return np.mean([ar_agg(D, WW, PAT, P).get(met, np.full(WW.shape[0], np.nan)) for D in PP[mid].values()], 0)
+            ONE = np.ones((1, len(P))); va, vb = ms(a, ONE)[0], ms(b, ONE)[0]; d = ms(a, W) - ms(b, W)
+            rows.append(dict(a=a, b=b, metric=met, value_a=va, value_b=vb, diff=va - vb, lo=np.nanpercentile(d, 2.5), hi=np.nanpercentile(d, 97.5), p=paired_p(d)))
+    T = pd.DataFrame(rows); T["p_holm"] = holm(T.p.values)
+    return T
+
+
+def continuous_criteria():
+    CONT_OUT.mkdir(parents=True, exist_ok=True)
+    cv_path = ALLRESULTS_OUT / "cv_matrix_long.csv"
+    if not cv_path.exists():
+        print("continuous_criteria: run scripts.allresults first"); return
+    CV = pd.read_csv(cv_path); PK = pickle.load(open(ALLRESULTS_OUT / "per_patient.pkl", "rb")); PP, Pc = PK["PPc"], PK["Pc"]
+    PAT = patients(); W = boot_weights(len(Pc))
+    get = lambda mid, met: CV[(CV.id == mid) & (CV.metric == met)]
+    fams = {}
+    for v in ("rs", "con", "ltc"):
+        mid = f"G6-{CONT_CNAME[v]}-V4"
+        if not len(get(mid, "mae")):
+            print(f"continuous_criteria: {mid} not trained yet, skipped"); continue
+        rows = []
+        for met, lab, sgn in CRIT_PERF:
+            a, b = get(mid, met).iloc[0], get("G6-GLANCE-V4", met).iloc[0]
+            sa, sb = (0 if not np.isfinite(x) else x for x in (a["sd"], b["sd"])); pooled = np.sqrt((sa ** 2 + sb ** 2) / 2)
+            worse_by = -sgn * (a["mean"] - b["mean"]); worse = bool(worse_by > 2 * pooled) if pooled > 0 else bool(worse_by > 0)
+            better = bool(-worse_by > 2 * pooled) if pooled > 0 else bool(-worse_by > 0)
+            rows.append(dict(endpoint=lab, variant=a["mean"], glance=b["mean"], diff=a["mean"] - b["mean"], two_pooled_sd=2 * pooled,
+                             verdict="worse" if worse else ("better" if better else "equal")))
+        P = pd.DataFrame(rows); P.to_csv(CONT_OUT / f"performance_criterion_{v}.csv", index=False)
+        T = _crit_boot(PP, PAT, Pc, [(mid, b) for b in CRIT_COMP], [m for m, _, _ in CRIT_PERF], W)
+        T["family"] = f"{mid} vs GLANCE V4 / NO V4"; fams[v] = T
+        nw = int((P.verdict == "worse").sum())
+        print(f"{mid}: {'PASS' if nw == 0 else 'FAIL'} ({nw} of {len(CRIT_PERF)} endpoints worse beyond seed noise)")
+    if fams:
+        pd.concat(fams.values()).to_csv(CONT_OUT / "tests_criteria.csv", index=False)
+    print("continuous_criteria done:", list(fams))
+
+
 def main():
     cmd = sys.argv[1]
     {"onset": onset, "onset_class": onset_class, "late_per_seed": late_per_seed, "onset_by_grade": onset_by_grade,
@@ -1054,7 +1236,8 @@ def main():
      "irregular": irregular, "irregular_3seeds": irregular_3seeds, "querystep": querystep,
      "offgrid_step0": offgrid_step0, "offgrid_unseen_visits": offgrid_unseen_visits,
      "offgrid_annual_grid": offgrid_annual_grid, "offgrid_monthly": offgrid_monthly,
-     "progression_metrics": progression_metrics}[cmd]()
+     "progression_metrics": progression_metrics, "continuous_consistency": continuous_consistency,
+     "continuous_unseen_visits": continuous_unseen_visits, "continuous_criteria": continuous_criteria}[cmd]()
 
 
 if __name__ == "__main__":

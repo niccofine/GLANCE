@@ -4,7 +4,8 @@ Run: python -m scripts.tests
 import sys
 import numpy as np, pandas as pd, torch
 from glance.data import load_cohort, load_samples, rounds, inner_split, horizon_weights, theil_sen, V2Dataset, collate_w, round_data, DUP_PAIRS, SPLIT_TEST, bin_index
-from glance.models import RNNLSTMGrid, RNNLSTM, build, run, loss
+from glance.models import RNNLSTMGrid, RNNLSTM, LNN, build, run, loss, query_points
+from glance.continuous import LNNLTC, build as continuous_build, rs_schedule, fine_schedule, pure_grid, T0_ELAPSED
 
 torch.manual_seed(0)
 
@@ -70,4 +71,50 @@ for name in ("lnn", "no", "rnn", "lstm"):
     L4[0].backward()
 i = 0; n = int(m[i].sum()); tt = t[i, :n]; mse_w = float((w[i, :n] * (pv[i, :n] - y[i, :n]) ** 2).sum() / n)
 ok(abs(float(loss("V2", pv[:1], y[:1], m[:1], w[:1], t[:1], pc[:1], qm[:1], so[:1])[1]) - mse_w) < 1e-5, "V2 weighted MSE = sum w.se / n")
+
+# 6. glance.continuous: LTC solver with precomputed sensory sums == ncps LTCCell.forward (state), several elapsed times
+mlt = LNNLTC(1025).double(); c = mlt.lnn.rnn_cell
+xlt = torch.rand(3, 1025, dtype=torch.float64); hlt = torch.randn(3, 256, dtype=torch.float64) * 0.3
+err = 0.0
+for el in (1 / 12, 0.5, 1.0, 3.0):
+    _, ref = c(xlt, hlt, el)
+    sn, sd = mlt.sensory(xlt); mine = mlt.solve(sn, sd, hlt, torch.full((3, 1), el, dtype=torch.float64))
+    err = max(err, float((ref - mine).abs().max()))
+ok(err < 1e-10, f"LNNLTC solver vs ncps LTCCell max abs diff {err:.2e}")
+
+# 7. LNNLTC.forward == step-by-step ncps cell (t = 0 step with elapsed 1.0, then dt); dt = 0 leaves the state unchanged
+mlt.eval(); q = torch.tensor([[0.0, 0.5, 1.0, 1.0, 2.0]], dtype=torch.float64)
+p = mlt(xlt[:1], q)
+hh = torch.zeros(1, 256, dtype=torch.float64); outs = []
+for k, el in enumerate([T0_ELAPSED, 0.5, 0.5, 0.0, 1.0]):
+    if el > 0:
+        o, hh = c(xlt[:1], hh, el)
+    else:
+        o = c._map_outputs(hh)
+    outs.append(mlt.project_clean(o))
+ref = torch.stack(outs, 1).squeeze(-1)
+ok(float((p - ref).abs().max()) < 1e-10, "LNNLTC.forward vs step-by-step ncps cell")
+ok(float((p[0, 2] - p[0, 3]).abs()) == 0.0, "LNNLTC: dt = 0 leaves the forecast unchanged")
+
+# 8. batched forward == per-sample forward (per-sample dt)
+qa = torch.tensor([[0.0, 0.5, 1.0, 2.0], [0.0, 1 / 12, 1.0, 1.0]], dtype=torch.float64)
+pb = mlt(xlt[:2], qa); ps = torch.cat([mlt(xlt[i:i + 1], qa[i:i + 1]) for i in range(2)])
+ok(float((pb - ps).abs().max()) < 1e-10, "LNNLTC: batched forward = per-sample forward")
+
+# 9. 'rs' / 'con' variants use the main LNN (CfC) class unchanged; 'ltc' uses LNNLTC
+ok(type(continuous_build("rs")) is LNN and type(continuous_build("con")) is LNN, "glance.continuous rs / con -> glance.models.LNN unchanged")
+ok(isinstance(continuous_build("ltc"), LNNLTC), "glance.continuous ltc -> LNNLTC")
+
+# 10. rs_schedule / fine_schedule / pure_grid sanity
+rng = np.random.default_rng(0); ok_sched = True; steps = []
+for _ in range(2000):
+    tv = np.round(np.sort(np.r_[0, rng.choice(np.arange(1, 30), rng.integers(1, 8), replace=False)]) * 0.5, 1).astype(np.float32)
+    u, s = rs_schedule(tv, rng); steps.append(s)
+    ok_sched &= bool(u[0] == 0 and np.all(np.diff(u) > 0) and np.isin(tv, u).all() and (u[~np.isin(u, tv)] <= 10 + 1e-6).all())
+    f = fine_schedule(tv); cq = query_points(torch.from_numpy(tv)).numpy()
+    ok_sched &= bool(np.isin(np.round(cq, 5), np.round(f, 5)).all())
+ok(ok_sched, "rs_schedule / fine_schedule: sorted, t = 0 exact, visits included, <= 10 y, fine schedule covers the GLANCE query points")
+ok({s: len(pure_grid(v)) for s, v in (("1/12", 1 / 12), ("1/4", .25), ("1/2", .5), ("1", 1.0))} == {"1/12": 121, "1/4": 41, "1/2": 21, "1": 11},
+   "pure_grid lengths")
+
 print("all tests passed")
