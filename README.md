@@ -23,24 +23,29 @@
   <i>Hajime Nagahara</i>
 </p>
 
-![Trajectories](./figures/trajectories_dark.png#gh-dark-mode-only)
-![Trajectories](./figures/trajectories_light.png#gh-light-mode-only)
+![Framework](./figures/glance.gif)
 
 ## Abstract
 
-Age-related macular degeneration (AMD) progresses at variable rates, and forecasting late AMD onset is critical for patient management.
-Rather than predicting binary risk at fixed horizons, we forecast the full grade trajectory from a single fundus visit using **GLANCE**, *Grade-guided Liquid AMD Network for Continuous-time Evolution*.
+Age-related macular degeneration (AMD) progression varies across patients, motivating forecasts of continuous disease trajectories beyond fixed-horizon risk prediction.
+
+We propose **GLANCE**, *Grade-guided Liquid AMD Network for Continuous-time Evolution*, a continuous-time Liquid Neural Network trained with clinically grounded objectives that penalize predicted severity decreases, balance forecasting horizons, and encourage agreement with observed progression trends.
 
 ![Framework](./figures/framework_dark.png#gh-dark-mode-only)
 ![Framework](./figures/framework_light.png#gh-light-mode-only)
 
  
 Our contributions are:
-- We formulate AMD progression as a **grade-guided continuous-time trajectory forecasting**: frozen RET-CLIP features of both eyes, $\mathbf{z_\mathrm{LE}}$ and $\mathbf{z_\mathrm{RE}}$, and the current grade, $s$, condition a closed-form Liquid Neural Network queried at any time.
+- We formulate AMD **severity-trajectory forecasting** from a single baseline visit using bilateral retinal fundus images and clinician-assigned severity scores.
 - We introduce a **progression penalty** against decreasing forecasts, with **horizon weighting** and a **robust slope loss** for distant follow-up and progression speed.
-- On AREDS dataset, with a pre-specified protocol, we show that the penalty removes implausible forecasts at comparable error, and that trajectory forecasters match fixed-horizon baselines on late AMD prediction while estimating **onset time**.
+- We introduce an **evaluation framework** assessing forecasting error across time horizons, trajectory plausibility, and trend agreement.
 
-Moreover, attribution analysis confirms the prognostic signal for disease worsening is concentrated around the macula and the optic disc.
+<!-- ![Trajectories](./figures/trajectories_dark.png#gh-dark-mode-only)
+![Trajectories](./figures/trajectories_light.png#gh-light-mode-only) -->
+
+On the AREDS dataset, GLANCE achieves Harrell's C-index of $0.96$ while reducing implausible severity drops from $70.1\%$ to $1.3\%$, preserving accuracy while ensuring monotonically plausible 10-year trajectories.
+Comparisons with discrete and continuous time models contextualize these findings, highlighting trade-offs between predictive performance and trajectory plausibility.
+This work establishes a foundation for clinically oriented AMD trajectory forecasting to support risk-informed screening and longitudinal monitoring.
 
 ## Cloning repository
 
@@ -79,24 +84,28 @@ The repository is **organized** into Python scripts and source code contained in
 │   ├── finaltraining.py          # final training
 │   ├── evaluation.py             # cross-validation and test metrics, statistical tests
 │   ├── explainability.py         # feature attribution, concept projection, pixel attribution
-│   ├── figures.py                # data for figure building
-│   ├── posthoc.py                # posthoc evaluations
+│   ├── figures.py                # paper figures and figure-backing data tables
+│   ├── posthoc.py                # post-hoc analyses
+│   ├── allresults.py             # consolidated per-patient scoring across models
+│   ├── extrametrics.py           # additional post-hoc metrics
 │   ├── tests.py                  # unit tests
 │   └── driver.sh                 # runs every step above in order
 ├── src/glance/
-│   ├── annual.py                 # annual-grid training experiment (posthoc)
 │   ├── config.py                 # paths and constants
 │   ├── data.py                   # cohort, sample, split loading, cross-validation, dataset
 │   ├── models.py                 # architectures, loss, training loop, GPU queue
-│   ├── irregular.py              # irregular-visit training experiment (posthoc)
+│   ├── irregular.py              # irregular-visit (posthoc)
+│   ├── annual.py                 # annual-grid (posthoc)
+│   ├── continuous.py             # LNN variants (posthoc)
 │   ├── encoder.py                # RET-CLIP visual encoder and image preprocessing
 │   └── evaluate.py               # metrics, statistical tests, evaluation
+├── results/
+│   └── supplementary.md          # supplementary material
 ├── .gitignore
 ├── LICENSE.md
 ├── README.md
 ├── requirements.txt
-├── setup.py                      # src setup script
-└── supplementary.md              # supplementary material
+└── setup.py                      # src setup script
 ```
 
 ## Data prerequisites
