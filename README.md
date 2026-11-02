@@ -1,4 +1,4 @@
-<h1 align="center">A GLANCE into the Future: Grade-Guided Liquid AMD Network for Continuous-Time Evolution of AMD Progression from Fundus Images</h1>
+<h1 align="center">A GLANCE into the Future: Grade-Guided Longitudinal AMD Network for Continuous-Time Evolution of AMD Progression from Fundus Images</h1>
 
 <!--
 <p align="center">
@@ -29,10 +29,9 @@
 
 Age-related macular degeneration (AMD) progression varies across patients, motivating forecasts of continuous disease trajectories beyond fixed-horizon risk prediction.
 
-We propose **GLANCE**, *Grade-guided Liquid AMD Network for Continuous-time Evolution*, a continuous-time Liquid Neural Network trained with clinically grounded objectives that penalize predicted severity decreases, balance forecasting horizons, and encourage agreement with observed progression trends.
+We propose **GLANCE**, *Grade-guided Longitudinal AMD Network for Continuous-time Evolution*, a continuous-time longitudinal network trained with clinically grounded objectives that penalize predicted severity decreases, balance forecasting horizons, and encourage agreement with observed progression trends.
 
-![Framework](./figures/framework_dark.png#gh-dark-mode-only)
-![Framework](./figures/framework_light.png#gh-light-mode-only)
+![Framework](./figures/framework.png)
 
  
 Our contributions are:
@@ -40,12 +39,9 @@ Our contributions are:
 - We introduce a **progression penalty** against decreasing forecasts, with **horizon weighting** and a **robust slope loss** for distant follow-up and progression speed.
 - We introduce an **evaluation framework** assessing forecasting error across time horizons, trajectory plausibility, and trend agreement.
 
-<!-- ![Trajectories](./figures/trajectories_dark.png#gh-dark-mode-only)
-![Trajectories](./figures/trajectories_light.png#gh-light-mode-only) -->
-
 On the AREDS dataset, GLANCE achieves Harrell's C-index of $0.96$ while reducing implausible severity drops from $70.1\%$ to $1.3\%$, preserving accuracy while ensuring monotonically plausible 10-year trajectories.
-Comparisons with discrete and continuous time models contextualize these findings, highlighting trade-offs between predictive performance and trajectory plausibility.
-This work establishes a foundation for clinically oriented AMD trajectory forecasting to support risk-informed screening and longitudinal monitoring.
+Comparisons with discrete- and continuous- time models  reveal trade-offs between predictive accuracy and agreement with observed progression.
+These findings establish a foundation for clinically oriented AMD trajectory forecasting to support risk-informed screening and longitudinal monitoring.
 
 ## Cloning repository
 
